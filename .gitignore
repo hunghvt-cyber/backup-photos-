@@ -1,0 +1,26 @@
+# Authentication / secrets
+profile*
+browser-data/
+session*
+*.age
+*.enc
+rclone.conf
+
+# Runtime state
+data/
+state/
+.gphotos-sync/
+*.sqlite
+*.sqlite3
+*.db
+
+# Downloads
+tmp/
+downloads/
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.DS_Store

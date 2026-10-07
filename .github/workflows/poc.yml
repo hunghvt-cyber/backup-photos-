@@ -1,0 +1,23 @@
+name: Google Photos POC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Architecture preflight
+        run: |
+          set -euo pipefail
+          echo "POC scaffold only."
+          echo "No Google login, download, upload, or deletion is enabled yet."
+          echo "Next gate: validate persistent Chromium profile on a fresh runner."
+          test -f docs/ARCHITECTURE.md
+          test -f .gitignore

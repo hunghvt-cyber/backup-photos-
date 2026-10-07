@@ -1,4 +1,4 @@
-name: Google Photos POC
+name: Google Photos Auth POC
 
 on:
   workflow_dispatch:
@@ -7,17 +7,134 @@ permissions:
   contents: read
 
 jobs:
-  preflight:
+  auth-poc:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Architecture preflight
+      - name: Validate required secrets
+        shell: bash
         run: |
           set -euo pipefail
-          echo "POC scaffold only."
-          echo "No Google login, download, upload, or deletion is enabled yet."
-          echo "Next gate: validate persistent Chromium profile on a fresh runner."
-          test -f docs/ARCHITECTURE.md
-          test -f .gitignore
+          test -n "$KOOFR_USER" || { echo "Missing KOOFR_USER"; exit 1; }
+          test -n "$KOOFR_APP_PASSWORD" || { echo "Missing KOOFR_APP_PASSWORD"; exit 1; }
+          test -n "$GPHOTOS_PROFILE_KEY" || { echo "Missing GPHOTOS_PROFILE_KEY"; exit 1; }
+
+      - name: Install runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone
+          python3 -m pip install --upgrade pip
+          python3 -m pip install playwright
+
+          if command -v google-chrome-stable >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+          elif command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          else
+            echo "Google Chrome not found on runner"
+            exit 1
+          fi
+
+      - name: Configure Koofr
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          KOOFR_PASS_OBSCURED="$(rclone obscure "$KOOFR_APP_PASSWORD")"
+          {
+            echo "[koofr_remote]"
+            echo "type = webdav"
+            echo "url = https://app.koofr.net/dav/Koofr"
+            echo "vendor = other"
+            echo "user = $KOOFR_USER"
+            echo "pass = $KOOFR_PASS_OBSCURED"
+          } > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+
+          rclone lsf "koofr_remote:/Google Photos/.gphotos-sync/auth"             --include "profile.tar.gz.enc"
+
+      - name: Restore encrypted Chrome profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME/gphotos-profile"
+
+          rclone copyto             "koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc"             /tmp/gphotos-profile.tar.gz.enc
+
+          openssl enc             -d             -aes-256-cbc             -pbkdf2             -iter 200000             -in /tmp/gphotos-profile.tar.gz.enc             -out /tmp/gphotos-profile.tar.gz             -pass env:GPHOTOS_PROFILE_KEY
+
+          tar -xzf /tmp/gphotos-profile.tar.gz -C "$HOME"
+
+          rm -f             "$HOME/gphotos-profile/SingletonLock"             "$HOME/gphotos-profile/SingletonSocket"             "$HOME/gphotos-profile/SingletonCookie"
+
+          test -d "$HOME/gphotos-profile"
+          rm -f /tmp/gphotos-profile.tar.gz /tmp/gphotos-profile.tar.gz.enc
+
+      - name: Test Google Photos session
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/test_session.py <<'PY'
+          import os
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          profile = str(Path.home() / "gphotos-profile")
+          chrome = os.environ["CHROME_BIN"]
+
+          with sync_playwright() as p:
+              context = p.chromium.launch_persistent_context(
+                  user_data_dir=profile,
+                  executable_path=chrome,
+                  headless=True,
+                  args=[
+                      "--disable-dev-shm-usage",
+                      "--no-first-run",
+                  ],
+              )
+
+              page = context.pages[0] if context.pages else context.new_page()
+              page.goto(
+                  "https://photos.google.com/",
+                  wait_until="domcontentloaded",
+                  timeout=120000,
+              )
+              page.wait_for_timeout(8000)
+
+              print("URL =", page.url)
+              print("TITLE =", page.title())
+
+              media_count = page.locator(
+                  'a[href*="/photo/"], a[href*="/video/"]'
+              ).count()
+
+              print("MEDIA_FOUND =", media_count)
+
+              if media_count <= 0:
+                  print("RESULT=FRESH_RUNNER_SESSION_FAILED")
+                  raise SystemExit(1)
+
+              print("RESULT=FRESH_RUNNER_SESSION_OK")
+              context.close()
+          PY
+
+          python3 /tmp/test_session.py
+
+      - name: Cleanup credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$HOME/gphotos-profile" || true
+          rm -f "$HOME/.config/rclone/rclone.conf" || true
+          rm -f /tmp/test_session.py || true

@@ -37,6 +37,10 @@ class DB:
  def done(self,i,nm,sz,h,r): self.c.execute("UPDATE media SET filename=?,size=?,sha256=?,remote=?,uploaded_at=?,last_seen=?,status='uploaded',last_error=NULL WHERE id=?",(nm,sz,h,r,now(),now(),i)); self.c.commit()
  def err(self,i,e): self.c.execute("UPDATE media SET last_error=?,status=CASE WHEN status='uploaded' THEN status ELSE 'error' END WHERE id=?",(str(e)[:800],i)); self.c.commit()
  def seen(self,g,i): self.c.execute("INSERT OR REPLACE INTO reconcile_seen VALUES(?,?,?)",(g,i,now())); self.c.commit()
+ def snapshot(self,p):
+  p=Path(p); p.unlink(missing_ok=True); out=sqlite3.connect(p)
+  try:self.c.commit();self.c.backup(out);out.commit()
+  finally:out.close()
  def report(self,g):
   up=self.c.execute("SELECT COUNT(*) FROM media WHERE status='uploaded'").fetchone()[0]; sn=self.c.execute("SELECT COUNT(*) FROM reconcile_seen WHERE gen=?",(g,)).fetchone()[0]; ms=self.c.execute("SELECT COUNT(*) FROM media m WHERE status='uploaded' AND NOT EXISTS(SELECT 1 FROM reconcile_seen r WHERE r.gen=? AND r.id=m.id)",(g,)).fetchone()[0]; return {'uploaded':up,'seen':sn,'missing_report_only':ms}
 
@@ -52,7 +56,7 @@ class Engine:
    r=cmd('rclone','copyto',f'{self.a.sroot}/{n}',str(self.sd/n),ok=False)
    if r.returncode:(self.sd/n).unlink(missing_ok=True)
  def flush(self):
-  self.db.c.commit(); self.db.c.execute('PRAGMA wal_checkpoint(FULL)'); self.db.c.commit(); savej(self.sd/'daily-checkpoint.json',self.cp); cmd('rclone','copyto',str(self.sd/'manifest.sqlite'),f'{self.a.sroot}/manifest.sqlite'); cmd('rclone','copyto',str(self.sd/'daily-checkpoint.json'),f'{self.a.sroot}/daily-checkpoint.json')
+  self.db.c.commit(); snap=self.sd/'manifest.snapshot.sqlite'; self.db.snapshot(snap); savej(self.sd/'daily-checkpoint.json',self.cp); cmd('rclone','copyto',str(snap),f'{self.a.sroot}/manifest.sqlite','--ignore-times'); cmd('rclone','copyto',str(self.sd/'daily-checkpoint.json'),f'{self.a.sroot}/daily-checkpoint.json','--ignore-times'); snap.unlink(missing_ok=True)
  def left(self):return self.a.seconds-int(time.monotonic()-self.start)
  def visible(self,p):
   out=[]; q=p.locator(SEL)

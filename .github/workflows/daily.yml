@@ -1,4 +1,4 @@
-name: Google Photos Daily Backup\n# recovery-canary-v2
+name: Google Photos Daily Backup
 
 on:
   workflow_dispatch:

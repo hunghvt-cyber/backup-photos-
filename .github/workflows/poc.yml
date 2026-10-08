@@ -137,33 +137,33 @@ jobs:
               page.goto(href, wait_until="domcontentloaded", timeout=120000)
               page.wait_for_timeout(3000)
 
-              cookies = context.cookies()
-              cookie_header = "; ".join(
-                  f"{item['name']}={item['value']}" for item in cookies
-              )
-              user_agent = page.evaluate("navigator.userAgent")
+              with page.expect_request(
+                  lambda req: "usercontent.google.com" in req.url,
+                  timeout=120000,
+              ) as request_info:
+                  with page.expect_download(timeout=120000) as download_info:
+                      page.keyboard.press("Shift+D")
 
-              with page.expect_download(timeout=120000) as info:
-                  page.keyboard.press("Shift+D")
-              download = info.value
-              download_url = download.url
+              browser_request = request_info.value
+              download = download_info.value
+              download_url = browser_request.url
+              request_headers = browser_request.all_headers()
               filename = Path(download.suggested_filename).name
-              print("DOWNLOAD_URL_HOST =", __import__("urllib.parse").parse.urlparse(download_url).netloc)
+
+              from urllib.parse import urlparse
+              print("DOWNLOAD_URL_HOST =", urlparse(download_url).netloc)
               print("DOWNLOAD_SUGGESTED_FILE =", filename)
 
-              # Do not depend on Playwright's temporary download file: it is
-              # tied to the browser context. Fetch the emitted download URL
-              # directly with the authenticated cookies captured above.
+              # Replay the exact authenticated request Chrome emitted. Do not
+              # print request_headers: they may contain authentication data.
               import urllib.request
-              request = urllib.request.Request(
-                  download_url,
-                  headers={
-                      "Cookie": cookie_header,
-                      "User-Agent": user_agent,
-                      "Referer": href,
-                      "Accept": "*/*",
-                  },
-              )
+              safe_headers = {
+                  key: value
+                  for key, value in request_headers.items()
+                  if key.lower() not in {"host", "content-length"}
+              }
+              safe_headers["accept-encoding"] = "identity"
+              request = urllib.request.Request(download_url, headers=safe_headers)
               destination = outdir / filename
               with urllib.request.urlopen(request, timeout=120) as response:
                   with destination.open("wb") as fh:

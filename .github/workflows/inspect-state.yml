@@ -32,3 +32,5 @@ jobs:
           sqlite3 /tmp/manifest.sqlite "select id,status,filename,size,remote from media order by uploaded_at desc limit 10;"
           echo "COUNT=$(sqlite3 /tmp/manifest.sqlite "select count(*) from media;")"
           rclone cat 'koofr_remote:/Google Photos/.gphotos-sync/daily-checkpoint.json'
+          echo '--- PRODUCTION FILES ---'
+          rclone lsl 'koofr_remote:/Google Photos/Photos'

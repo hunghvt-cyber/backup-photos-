@@ -160,7 +160,7 @@ jobs:
               safe_headers = {
                   key: value
                   for key, value in request_headers.items()
-                  if key.lower() not in {"host", "content-length"}
+                  if not key.startswith(":") and key.lower() not in {"host", "content-length"}
               }
               safe_headers["accept-encoding"] = "identity"
               request = urllib.request.Request(download_url, headers=safe_headers)
@@ -207,4 +207,5 @@ jobs:
         run: |
           rm -rf "$HOME/gphotos-profile" || true
           rm -f "$HOME/.config/rclone/rclone.conf" || true
-          rm -f /tmp/test_session.py /tmp/test_transfer.py || true\n          rm -rf /tmp/gphotos-poc-download || true
+          rm -f /tmp/test_session.py /tmp/test_transfer.py || true
+          rm -rf /tmp/gphotos-poc-download || true

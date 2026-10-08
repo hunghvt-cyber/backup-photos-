@@ -9,10 +9,6 @@ on:
         default: "1000"
   schedule:
     - cron: "17 20 * * *"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/daily.yml"
 
 permissions:
   contents: read

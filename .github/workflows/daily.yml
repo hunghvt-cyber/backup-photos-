@@ -9,10 +9,6 @@ on:
         default: "1000"
   schedule:
     - cron: "17 20 * * *"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/daily.yml"
 
 permissions:
   contents: read
@@ -30,7 +26,7 @@ jobs:
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
       MAX_RUNTIME_SECONDS: "16800"
-      MAX_ITEMS: ${{ github.event_name == 'push' && '3' || inputs.max_items || '1000' }}
+      MAX_ITEMS: ${{ inputs.max_items || '1000' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install runtime

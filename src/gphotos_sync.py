@@ -5,7 +5,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 SEL='a[href*="/photo/"],a[href*="/video/"]'; ID=re.compile(r'/(photo|video)/([^/?#]+)')
-VIDATE=re.compile(r'(\\d{1,2}):(\\d{2}):(\\d{2})\\s+(\\d{1,2})\\s+thg\\s+(\\d{1,2}),\\s*(\\d{4})',re.I)
+VIDATE=re.compile(r'(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\s+thg\s+(\d{1,2}),\s*(\d{4})',re.I)
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def cmd(*a,ok=True,cap=False): return subprocess.run(a,check=ok,text=True,capture_output=cap)
 def savej(p,d):

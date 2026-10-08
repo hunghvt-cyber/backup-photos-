@@ -134,10 +134,90 @@ jobs:
 
           python3 /tmp/test_session.py
 
+      - name: Download one Google Photos item and upload to Koofr
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/gphotos-poc-download
+          mkdir -p /tmp/gphotos-poc-download
+
+          cat > /tmp/test_transfer.py <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          from playwright.sync_api import sync_playwright
+
+          profile = str(Path.home() / "gphotos-profile")
+          chrome = os.environ["CHROME_BIN"]
+          outdir = Path("/tmp/gphotos-poc-download")
+
+          with sync_playwright() as p:
+              context = p.chromium.launch_persistent_context(
+                  user_data_dir=profile,
+                  executable_path=chrome,
+                  headless=True,
+                  accept_downloads=True,
+                  args=["--disable-dev-shm-usage", "--no-first-run"],
+              )
+              page = context.pages[0] if context.pages else context.new_page()
+              page.goto("https://photos.google.com/", wait_until="domcontentloaded", timeout=120000)
+              page.wait_for_timeout(8000)
+
+              media = page.locator('a[href*="/photo/"], a[href*="/video/"]')
+              count = media.count()
+              print("TRANSFER_MEDIA_FOUND =", count)
+              if count <= 0:
+                  raise SystemExit("No media found")
+
+              href = media.first.get_attribute("href")
+              if not href:
+                  raise SystemExit("First media has no href")
+              if href.startswith("./"):
+                  href = "https://photos.google.com/" + href[2:]
+              elif href.startswith("/"):
+                  href = "https://photos.google.com" + href
+
+              print("TRANSFER_TARGET =", href)
+              page.goto(href, wait_until="domcontentloaded", timeout=120000)
+              page.wait_for_timeout(3000)
+
+              with page.expect_download(timeout=120000) as info:
+                  page.keyboard.press("Shift+D")
+              download = info.value
+              filename = Path(download.suggested_filename).name
+              destination = outdir / filename
+              download.save_as(destination)
+
+              size = destination.stat().st_size
+              sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
+              print("DOWNLOAD_FILE =", filename)
+              print("DOWNLOAD_SIZE =", size)
+              print("DOWNLOAD_SHA256 =", sha256)
+              if size <= 0:
+                  raise SystemExit("Downloaded file is empty")
+              context.close()
+          PY
+
+          python3 /tmp/test_transfer.py
+
+          FILE="$(find /tmp/gphotos-poc-download -maxdepth 1 -type f -print -quit)"
+          test -n "$FILE"
+          BASENAME="$(basename "$FILE")"
+          LOCAL_SIZE="$(stat -c %s "$FILE")"
+
+          rclone copyto "$FILE" "koofr_remote:/Google Photos/POC-Actions/$BASENAME" --ignore-times -P
+
+          REMOTE_LINE="$(rclone lsl "koofr_remote:/Google Photos/POC-Actions/$BASENAME")"
+          echo "KOOFR_FILE = $REMOTE_LINE"
+          REMOTE_SIZE="$(printf '%s\\n' "$REMOTE_LINE" | awk '{print $1}')"
+          test "$LOCAL_SIZE" = "$REMOTE_SIZE"
+
+          echo "RESULT=FRESH_RUNNER_TRANSFER_OK"
+
       - name: Cleanup credentials
         if: always()
         shell: bash
         run: |
           rm -rf "$HOME/gphotos-profile" || true
           rm -f "$HOME/.config/rclone/rclone.conf" || true
-          rm -f /tmp/test_session.py || true
+          rm -f /tmp/test_session.py /tmp/test_transfer.py || true\n          rm -rf /tmp/gphotos-poc-download || true

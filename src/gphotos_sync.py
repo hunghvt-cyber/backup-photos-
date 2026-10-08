@@ -76,19 +76,26 @@ class Engine:
   with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
   if dst.stat().st_size<1:raise RuntimeError('empty download')
   return dst,nm
- def remote(self,cr,nm,i):
+ def remote(self,cr,nm,i,local_sha,local_size):
   try:d=datetime.fromisoformat(cr) if cr else None; y,m=(f'{d.year:04d}',f'{d.month:02d}') if d else ('Unknown-Date','00')
   except:y,m='Unknown-Date','00'
-  base=f'{self.a.root}/{y}/{m}/{Path(nm).name}'; r=cmd('rclone','lsf',base,ok=False,cap=True)
-  if r.returncode==0 and r.stdout.strip():
+  base=f'{self.a.root}/{y}/{m}/{Path(nm).name}'; q=cmd('rclone','lsl',base,ok=False,cap=True)
+  if q.returncode==0 and q.stdout.strip():
+   try:remote_size=int(q.stdout.strip().split()[0])
+   except:remote_size=-1
+   if remote_size==local_size:
+    check=self.wd/f'{i}__remote-verify'; cmd('rclone','copyto',base,str(check))
+    try:
+     if sha(check)==local_sha:return base,True
+    finally:check.unlink(missing_ok=True)
    s,x=os.path.splitext(Path(nm).name); base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
-  return base
+  return base,False
  def one(self,p,i,t,u,l,cr):
   self.db.touch(i,t,u,l,cr)
   if self.db.uploaded(i):self.stats['skipped']+=1;return
   f=None
   try:
-   f,nm=self.download(p,u,i); sz=f.stat().st_size; h=sha(f); r=self.remote(cr,nm,i); cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3'); line=cmd('rclone','lsl',r,cap=True).stdout.strip(); rz=int(line.split()[0]) if line else -1
+   f,nm=self.download(p,u,i); sz=f.stat().st_size; h=sha(f); r,exists=self.remote(cr,nm,i,h,sz); (None if exists else cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')); line=cmd('rclone','lsl',r,cap=True).stdout.strip(); rz=int(line.split()[0]) if line else -1
    if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
    self.db.done(i,nm,sz,h,r); self.stats['uploaded']+=1; self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()}); self.flush(); print(f'UPLOAD_OK id={i} file={nm} size={sz}',flush=True)
   except Exception as e:self.stats['errors']+=1;self.db.err(i,e);self.flush();print(f'UPLOAD_ERROR id={i} error={e}',file=sys.stderr,flush=True)

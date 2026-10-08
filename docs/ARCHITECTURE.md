@@ -1,43 +1,49 @@
 # Architecture
 
-## Daily path
+## Data path
 
-Google Photos → authenticated headless browser → temporary local file → rclone → Koofr → manifest/checkpoint.
+Google Photos web UI → authenticated persistent Chrome profile → Playwright → official Download action → captured authenticated Google download request → temporary runner file → SHA-256 → rclone/WebDAV → Koofr → SQLite manifest/checkpoint.
 
-The daily job only advances forward from its checkpoint. It does not enumerate the historical library to discover deletions.
+The GitHub runner is disposable. Durable media and state live on Koofr.
 
-## Reconcile path
+## Identity and destination
 
-A separate quarterly job performs a resumable full inventory. Each run belongs to a reconcile generation. Missing media may only be evaluated after that generation is explicitly marked COMPLETE.
+V1 uses the opaque identifier exposed by current Google Photos media URLs such as `/photo/AF1Qip...` as the SQLite primary key. Filename is metadata only.
 
-Initial reconcile is report-only. Future deletion requires a grace period and independent safety thresholds.
+Destination layout is `Google Photos/Photos/YYYY/MM/<filename>`. If that path already exists, V1 appends a short media-ID suffix instead of overwriting.
+
+## Daily state machine
+
+1. Restore encrypted browser profile and state from Koofr.
+2. Enumerate Google Photos newest-first.
+3. Upsert discovery metadata by media ID.
+4. Skip IDs already marked `uploaded`.
+5. Trigger Google's Download action and capture the authenticated file request.
+6. Download to runner, compute SHA-256, upload to Koofr.
+7. Verify Koofr byte size equals local byte size.
+8. Only then mark the item `uploaded`.
+9. Flush SQLite/checkpoint to Koofr after each successful item.
+10. Stop before the GitHub Actions five-hour limit.
+
+Initial bootstrap may revisit the newest prefix on later runs. The manifest makes this idempotent. After the historical end is reached, `bootstrap_complete` allows daily jobs to stop at the previous newest checkpoint.
+
+## Quarterly reconcile
+
+A reconcile generation records `(generation, media_id)` observations. The scanner is bounded and can continue the same generation on later runs. Missing counts are report-only.
+
+There is intentionally no deletion function in V1. Any future deletion feature requires multiple proven complete generations, a grace period and explicit safety thresholds.
 
 ## Authentication
 
-Interactive authentication is separated from backup execution:
+Interactive login is only required to create or refresh the profile. The closed Chrome profile is archived and encrypted with AES-256-CBC + PBKDF2. The encrypted archive is stored on Koofr while its key is stored separately as a GitHub Actions secret.
 
-1. Launch Chromium with a persistent user-data directory in a temporary graphical environment such as Codespaces + noVNC.
-2. User completes Google login/2FA.
-3. Close Chromium cleanly.
-4. Archive and encrypt the profile.
-5. Store encrypted profile in Koofr state storage.
-6. GitHub Actions restores a worker copy and launches Chromium headlessly.
+Fresh-runner portability has been proven in production-like POC runs.
 
-Worker copies must not concurrently write the same browser profile archive.
+## Failure model
 
-## State model
-
-The manifest must eventually retain at least:
-
-- stable Google Photos identity (to be validated during POC)
-- filename
-- creation timestamp
-- media type
-- Koofr path
-- first_seen
-- last_seen
-- uploaded_at
-- status
-- optional size/hash when reliably available
-
-The exact identity field is deliberately not fixed until the selected downloader is validated against current Google Photos.
+- **Download/upload error:** manifest records the error and retries the item on a later run.
+- **Runner interruption:** previously flushed items remain durable; unfinished items are retried.
+- **Duplicate filename:** no overwrite; media-ID suffix is used.
+- **Expired Google session:** scanner fails closed when authenticated media is not visible.
+- **Concurrent daily/reconcile:** prevented by one shared Actions concurrency group.
+- **Missing remote state on first bootstrap:** a new manifest/checkpoint is created; existing remote state is restored when present.

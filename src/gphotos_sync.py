@@ -46,7 +46,7 @@ class DB:
 
 class Engine:
  def __init__(self,a):
-  self.a=a; self.start=time.monotonic(); self.sd=Path(a.state); self.wd=Path(a.work); self.sd.mkdir(parents=True,exist_ok=True); self.wd.mkdir(parents=True,exist_ok=True); self.restore(); self.db=DB(self.sd/'manifest.sqlite'); self.cp=self.load('daily-checkpoint.json',{'version':1,'bootstrap_complete':False}); self.stats={'discovered':0,'uploaded':0,'skipped':0,'errors':0}; self.seen=set()
+  self.a=a; self.start=time.monotonic(); self.sd=Path(a.state); self.wd=Path(a.work); self.sd.mkdir(parents=True,exist_ok=True); self.wd.mkdir(parents=True,exist_ok=True); self.restore(); self.db=DB(self.sd/'manifest.sqlite'); self.cp=self.load('daily-checkpoint.json',{'version':1,'bootstrap_complete':False}); self.stats={'discovered':0,'attempted':0,'uploaded':0,'skipped':0,'errors':0}; self.seen=set()
  def load(self,n,d):
   p=self.sd/n
   try:return json.loads(p.read_text())
@@ -68,59 +68,71 @@ class Engine:
    except:continue
    l=e.get_attribute('aria-label') or e.get_attribute('data-tooltip'); out.append((i,t,u,l,created(l)))
   return out
- def download(self,p,u,i):
-  p.goto(u,wait_until='domcontentloaded',timeout=120000); p.wait_for_timeout(2500)
-  with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
-   with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
-  r=rq.value; d=dl.value; hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length')}; hs['accept-encoding']='identity'; nm=Path(d.suggested_filename).name; dst=self.wd/f'{i}__{nm}'
-  with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
-  if dst.stat().st_size<1:raise RuntimeError('empty download')
-  return dst,nm
+ def download(self,pw,u,i):
+  c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,accept_downloads=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
+  try:
+   p.goto(u,wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(2500)
+   with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
+    with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
+   r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
+   with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
+   if dst.stat().st_size<1:raise RuntimeError('empty download')
+   return dst,nm
+  finally:
+   try:c.close()
+   except:pass
  def remote(self,cr,nm,i,local_sha,local_size):
-  try:d=datetime.fromisoformat(cr) if cr else None; y,m=(f'{d.year:04d}',f'{d.month:02d}') if d else ('Unknown-Date','00')
+  try:d=datetime.fromisoformat(cr) if cr else None;y,m=(f'{d.year:04d}',f'{d.month:02d}') if d else ('Unknown-Date','00')
   except:y,m='Unknown-Date','00'
-  base=f'{self.a.root}/{y}/{m}/{Path(nm).name}'; q=cmd('rclone','lsl',base,ok=False,cap=True)
+  base=f'{self.a.root}/{y}/{m}/{Path(nm).name}';q=cmd('rclone','lsl',base,ok=False,cap=True)
   if q.returncode==0 and q.stdout.strip():
    try:remote_size=int(q.stdout.strip().split()[0])
    except:remote_size=-1
    if remote_size==local_size:
-    check=self.wd/f'{i}__remote-verify'; cmd('rclone','copyto',base,str(check))
+    check=self.wd/f'{i}__remote-verify';cmd('rclone','copyto',base,str(check))
     try:
      if sha(check)==local_sha:return base,True
     finally:check.unlink(missing_ok=True)
-   s,x=os.path.splitext(Path(nm).name); base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
+   s,x=os.path.splitext(Path(nm).name);base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
   return base,False
- def one(self,p,i,t,u,l,cr):
+ def one(self,pw,i,t,u,l,cr):
   self.db.touch(i,t,u,l,cr)
   if self.db.uploaded(i):self.stats['skipped']+=1;return
-  f=None
+  self.stats['attempted']+=1;f=None
   try:
-   f,nm=self.download(p,u,i); sz=f.stat().st_size; h=sha(f); r,exists=self.remote(cr,nm,i,h,sz); (None if exists else cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')); line=cmd('rclone','lsl',r,cap=True).stdout.strip(); rz=int(line.split()[0]) if line else -1
+   f,nm=self.download(pw,u,i);sz=f.stat().st_size;h=sha(f);r,exists=self.remote(cr,nm,i,h,sz)
+   if not exists:cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')
+   line=cmd('rclone','lsl',r,cap=True).stdout.strip();rz=int(line.split()[0]) if line else -1
    if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
-   self.db.done(i,nm,sz,h,r); self.stats['uploaded']+=1; self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()}); self.flush(); print(f'UPLOAD_OK id={i} file={nm} size={sz}',flush=True)
+   self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1;self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()});self.flush();print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)
   except Exception as e:self.stats['errors']+=1;self.db.err(i,e);self.flush();print(f'UPLOAD_ERROR id={i} error={e}',file=sys.stderr,flush=True)
   finally:
    if f:f.unlink(missing_ok=True)
- def daily(self):
-  boundary=self.cp.get('newest_id') if self.cp.get('bootstrap_complete') else None; hit=False; head=None; nogrow=0
-  with sync_playwright() as pw:
-   c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,accept_downloads=True,args=['--disable-dev-shm-usage','--no-first-run']); p=c.pages[0] if c.pages else c.new_page(); p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(8000)
+ def scan(self,pw):
+  c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
+  try:
+   p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(6000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
-   while self.left()>180 and self.stats['uploaded']<self.a.maxitems:
-    n=0
-    for i,t,u,l,cr in self.visible(p):
+   for _ in range(len(self.seen)//15):
+    p.keyboard.press('End');p.wait_for_timeout(700)
+   return self.visible(p)
+  finally:
+   try:c.close()
+   except:pass
+ def daily(self):
+  boundary=self.cp.get('newest_id') if self.cp.get('bootstrap_complete') else None;hit=False;head=None;nogrow=0
+  with sync_playwright() as pw:
+   while self.left()>180 and self.stats['attempted']<self.a.maxitems:
+    items=self.scan(pw);n=0
+    for i,t,u,l,cr in items:
      if i in self.seen:continue
      self.seen.add(i);head=head or i;n+=1;self.stats['discovered']+=1
      if boundary and i==boundary:hit=True;break
-     self.one(p,i,t,u,l,cr)
-     if self.left()<=180 or self.stats['uploaded']>=self.a.maxitems:break
-    if hit or self.left()<=180 or self.stats['uploaded']>=self.a.maxitems:break
+     self.one(pw,i,t,u,l,cr)
+     if self.left()<=180 or self.stats['attempted']>=self.a.maxitems:break
+    if hit or self.left()<=180 or self.stats['attempted']>=self.a.maxitems:break
     nogrow=nogrow+1 if n==0 else 0
     if nogrow>=3:self.cp.update({'bootstrap_complete':True,'bootstrap_completed_at':now()});break
-    p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(1200)
-    for _ in range(max(1,len(self.seen)//20)):p.keyboard.press('End');p.wait_for_timeout(700)
-   try:c.close()
-   except:pass
   if hit and head:self.cp['newest_id']=head
   elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
   self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}

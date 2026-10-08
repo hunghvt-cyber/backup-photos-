@@ -59,6 +59,15 @@ jobs:
           rm -f /tmp/profile.enc /tmp/profile.tgz
       - name: Report-only full inventory
         run: python3 -m src.gphotos_sync reconcile
+      - name: Persist refreshed Chrome profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+          tar -C "$HOME" -czf /tmp/profile-refresh.tgz gphotos-profile
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in /tmp/profile-refresh.tgz -out /tmp/profile-refresh.enc -pass env:GPHOTOS_PROFILE_KEY
+          rclone copyto /tmp/profile-refresh.enc 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' --ignore-times
+          rm -f /tmp/profile-refresh.tgz /tmp/profile-refresh.enc
       - name: Cleanup worker credentials
         if: always()
         shell: bash

@@ -18,14 +18,18 @@ Destination layout is `Google Photos/Photos/YYYY/MM/<filename>`. If that path al
 2. Enumerate Google Photos newest-first.
 3. Upsert discovery metadata by media ID.
 4. Skip IDs already marked `uploaded`.
-5. Trigger Google's Download action and capture the authenticated file request.
+5. Open that media in an isolated Chrome context, trigger Google's Download action, and capture the authenticated file request.
 6. Download to runner, compute SHA-256, upload to Koofr.
 7. Verify Koofr byte size equals local byte size.
 8. Only then mark the item `uploaded`.
-9. Flush SQLite/checkpoint to Koofr after each successful item.
+9. Create a consistent SQLite Backup API snapshot, then flush that snapshot/checkpoint to Koofr after each successful item.
 10. Stop before the GitHub Actions five-hour limit.
 
-Initial bootstrap may revisit the newest prefix on later runs. The manifest makes this idempotent. After the historical end is reached, `bootstrap_complete` allows daily jobs to stop at the previous newest checkpoint.
+Initial bootstrap completed on 2026-10-08. The manifest makes repeated scans idempotent. With `bootstrap_complete=true`, normal daily jobs stop at the previous newest checkpoint.
+
+If a remote candidate already exists while manifest state is missing, the engine verifies size and SHA-256. A matching object is reused and the manifest is healed instead of uploading a duplicate.
+
+Each media download intentionally uses its own Chrome context. Google/Chrome may close a context after download; isolating downloads prevents one closure from killing the rest of a batch.
 
 ## Quarterly reconcile
 
@@ -43,6 +47,8 @@ Fresh-runner portability has been proven in production-like POC runs.
 
 - **Download/upload error:** manifest records the error and retries the item on a later run.
 - **Runner interruption:** previously flushed items remain durable; unfinished items are retried.
+- **SQLite WAL:** the live WAL database is never copied as the durable manifest; a SQLite Backup API snapshot is uploaded instead.
+- **Missing manifest row with existing media:** verify size + SHA-256 and reconstruct state when identical.
 - **Duplicate filename:** no overwrite; media-ID suffix is used.
 - **Expired Google session:** scanner fails closed when authenticated media is not visible.
 - **Concurrent daily/reconcile:** prevented by one shared Actions concurrency group.

@@ -2,6 +2,8 @@
 
 One-way, resumable backup of an existing Google Photos library to Koofr, designed for unattended GitHub Actions.
 
+> Continuing development with another AI? Read [`AI_CONTEXT.md`](AI_CONTEXT.md) first. It contains the current production state, safety invariants, incident history, proven fixes, schedules, and development protocol.
+
 ## Status
 
 The foundation and production path have been proven on fresh GitHub-hosted runners:
@@ -13,6 +15,8 @@ The foundation and production path have been proven on fresh GitHub-hosted runne
 - replay the authenticated download request and obtain the real file;
 - compute SHA-256, upload through rclone/WebDAV, and verify remote byte size;
 - persist SQLite manifest and JSON checkpoint back to Koofr.
+
+Initial historical bootstrap completed successfully on 2026-10-08. The bootstrap run discovered 21 media, uploaded 16 new items, skipped 5 already committed items, and finished with 0 errors and `bootstrap_complete=true`.
 
 POC media was removed after validation. Production media is stored separately under `Google Photos/Photos/`.
 
@@ -40,7 +44,7 @@ Runs at 03:17 Vietnam time and can be started manually. During initial bootstrap
 
 **Quarterly reconcile** — `.github/workflows/reconcile.yml`
 
-Runs at 02:41 Vietnam time on the first day of January, April, July and October. It inventories Google Photos into a reconcile generation and writes a report. V1 never deletes.
+Runs at **19:41 UTC on day 1** of January, April, July and October, which is **02:41 Vietnam time on day 2**. The simple UTC schedule is intentional for maintainability. It inventories Google Photos into a reconcile generation and writes a report. V1 never deletes.
 
 Both workflows use the same concurrency group so they cannot mutate persistent state simultaneously.
 
@@ -67,4 +71,6 @@ The profile encryption key must match `.gphotos-sync/auth/profile.tar.gz.enc`.
 
 ## State recovery
 
-The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. State is flushed after every successful upload and again during final cleanup. If a run is interrupted, already committed items are skipped on the next run.
+The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. SQLite runs in WAL mode locally, so production creates a consistent snapshot with SQLite's Backup API before uploading the remote manifest. State is flushed after every successful upload and again during final cleanup. If a run is interrupted, already committed items are skipped on the next run.
+
+If manifest state is missing but a candidate Koofr object already exists, production compares size and SHA-256 and can reconstruct the manifest instead of creating a duplicate.

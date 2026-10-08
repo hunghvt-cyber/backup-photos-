@@ -108,7 +108,8 @@ class Engine:
     if nogrow>=3:self.cp.update({'bootstrap_complete':True,'bootstrap_completed_at':now()});break
     p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(1200)
     for _ in range(max(1,len(self.seen)//20)):p.keyboard.press('End');p.wait_for_timeout(700)
-   c.close()
+   try:c.close()
+   except:pass
   if hit and head:self.cp['newest_id']=head
   elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
   self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}
@@ -125,7 +126,8 @@ class Engine:
     nogrow=nogrow+1 if n==0 else 0
     if nogrow>=3:complete=True;break
     p.keyboard.press('End');p.wait_for_timeout(900)
-   c.close()
+   try:c.close()
+   except:pass
   st.update({'status':'COMPLETE' if complete else 'PAUSED','updated_at':now(),'seen_this_run':len(seen),'report':self.db.report(g),'deletion_enabled':False});savej(sp,st);self.flush();cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json');rp=self.sd/f'reconcile-report-{g}.json';savej(rp,st);cmd('rclone','copyto',str(rp),f'{self.a.sroot}/logs/{rp.name}');return st
 
 def main():

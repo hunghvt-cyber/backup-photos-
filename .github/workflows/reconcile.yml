@@ -64,9 +64,14 @@ jobs:
       - name: Report-only full inventory
         run: python3 -m src.gphotos_sync reconcile
       - name: Persist refreshed Chrome profile
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
+          if [ ! -d "$HOME/gphotos-profile" ] || ! command -v rclone >/dev/null; then
+            echo "No worker profile to persist"
+            exit 0
+          fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
           tar -C "$HOME" -czf /tmp/profile-refresh.tgz gphotos-profile
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in /tmp/profile-refresh.tgz -out /tmp/profile-refresh.enc -pass env:GPHOTOS_PROFILE_KEY

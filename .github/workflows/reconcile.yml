@@ -1,0 +1,67 @@
+name: Google Photos Quarterly Reconcile
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 19 1 1,4,7,10 *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-photos-koofr-state
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
+      MAX_RUNTIME_SECONDS: "16800"
+      MAX_ITEMS: "999999"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and configure runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$KOOFR_USER" && test -n "$KOOFR_APP_PASSWORD" && test -n "$GPHOTOS_PROFILE_KEY"
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone
+          python3 -m pip install --disable-pip-version-check -r requirements.txt
+          if command -v google-chrome-stable >/dev/null; then
+            echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
+          else
+            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          fi
+          mkdir -p "$HOME/.config/rclone"
+          PASS="$(rclone obscure "$KOOFR_APP_PASSWORD")"
+          {
+            echo '[koofr_remote]'
+            echo 'type = webdav'
+            echo 'url = https://app.koofr.net/dav/Koofr'
+            echo 'vendor = other'
+            echo "user = $KOOFR_USER"
+            echo "pass = $PASS"
+          } > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+      - name: Restore Chrome profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          rclone copyto 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' /tmp/profile.enc
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in /tmp/profile.enc -out /tmp/profile.tgz -pass env:GPHOTOS_PROFILE_KEY
+          tar -C "$HOME" -xzf /tmp/profile.tgz
+          rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+          rm -f /tmp/profile.enc /tmp/profile.tgz
+      - name: Report-only full inventory
+        run: python3 -m src.gphotos_sync reconcile
+      - name: Cleanup worker credentials
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$HOME/gphotos-profile" /tmp/gphotos-downloads /tmp/gphotos-state || true
+          rm -f "$HOME/.config/rclone/rclone.conf" || true

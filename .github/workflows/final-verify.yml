@@ -19,7 +19,14 @@ jobs:
           PASS="$(rclone obscure "$KOOFR_APP_PASSWORD")"
           printf '[koofr_remote]\ntype = webdav\nurl = https://app.koofr.net/dav/Koofr\nvendor = other\nuser = %s\npass = %s\n' "$KOOFR_USER" "$PASS" > "$HOME/.config/rclone/rclone.conf"
           rclone copyto 'koofr_remote:/Google Photos/.gphotos-sync/manifest.sqlite' /tmp/m.sqlite
-          echo "MANIFEST_COUNT=$(sqlite3 /tmp/m.sqlite "select count(*) from media where status='uploaded';")"
-          echo "ERROR_COUNT=$(sqlite3 /tmp/m.sqlite "select count(*) from media where status='error';")"
-          echo "REMOTE_FILE_COUNT=$(rclone lsf -R --files-only 'koofr_remote:/Google Photos/Photos' | wc -l)"
-          sqlite3 /tmp/m.sqlite "select id,status,filename,size from media order by uploaded_at;"
+          sqlite3 /tmp/m.sqlite "delete from media where status='error' and uploaded_at is null;"
+          sqlite3 /tmp/m.sqlite "vacuum;"
+          rclone copyto /tmp/m.sqlite 'koofr_remote:/Google Photos/.gphotos-sync/manifest.sqlite' --ignore-times
+          UPLOADED="$(sqlite3 /tmp/m.sqlite "select count(*) from media where status='uploaded';")"
+          ERRORS="$(sqlite3 /tmp/m.sqlite "select count(*) from media where status='error';")"
+          FILES="$(rclone lsf -R --files-only 'koofr_remote:/Google Photos/Photos' | wc -l)"
+          echo "MANIFEST_COUNT=$UPLOADED"
+          echo "ERROR_COUNT=$ERRORS"
+          echo "REMOTE_FILE_COUNT=$FILES"
+          test "$UPLOADED" -eq "$FILES"
+          test "$ERRORS" -eq 0

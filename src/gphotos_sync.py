@@ -138,7 +138,7 @@ class Engine:
 
 def main():
  a=argparse.ArgumentParser();a.add_argument('mode',choices=['daily','reconcile']);a.add_argument('--profile',default=os.path.expanduser('~/gphotos-profile'));a.add_argument('--chrome',default=os.environ.get('CHROME_BIN','/usr/bin/google-chrome-stable'));a.add_argument('--state',default='/tmp/gphotos-state');a.add_argument('--work',default='/tmp/gphotos-downloads');a.add_argument('--root',default='koofr_remote:/Google Photos/Photos');a.add_argument('--sroot',default='koofr_remote:/Google Photos/.gphotos-sync');a.add_argument('--seconds',type=int,default=int(os.environ.get('MAX_RUNTIME_SECONDS','16800')));a.add_argument('--maxitems',type=int,default=int(os.environ.get('MAX_ITEMS','1000')));x=a.parse_args();e=Engine(x)
- try:r=e.daily() if x.mode=='daily' else e.reconcile();print('SUMMARY='+json.dumps(r,ensure_ascii=False));return 0
+ try:r=e.daily() if x.mode=='daily' else e.reconcile();print('SUMMARY='+json.dumps(r,ensure_ascii=False));return 1 if x.mode=='daily' and r.get('errors',0)>0 else 0
  finally:
   try:e.flush()
   except Exception as z:print('FINAL_STATE_FLUSH_ERROR='+str(z),file=sys.stderr)

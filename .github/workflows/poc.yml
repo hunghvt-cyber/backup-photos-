@@ -83,58 +83,7 @@ jobs:
           test -d "$HOME/gphotos-profile"
           rm -f /tmp/gphotos-profile.tar.gz /tmp/gphotos-profile.tar.gz.enc
 
-      - name: Test Google Photos session
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cat > /tmp/test_session.py <<'PY'
-          import os
-          from pathlib import Path
-          from playwright.sync_api import sync_playwright
-
-          profile = str(Path.home() / "gphotos-profile")
-          chrome = os.environ["CHROME_BIN"]
-
-          with sync_playwright() as p:
-              context = p.chromium.launch_persistent_context(
-                  user_data_dir=profile,
-                  executable_path=chrome,
-                  headless=True,
-                  args=[
-                      "--disable-dev-shm-usage",
-                      "--no-first-run",
-                  ],
-              )
-
-              page = context.pages[0] if context.pages else context.new_page()
-              page.goto(
-                  "https://photos.google.com/",
-                  wait_until="domcontentloaded",
-                  timeout=120000,
-              )
-              page.wait_for_timeout(8000)
-
-              print("URL =", page.url)
-              print("TITLE =", page.title())
-
-              media_count = page.locator(
-                  'a[href*="/photo/"], a[href*="/video/"]'
-              ).count()
-
-              print("MEDIA_FOUND =", media_count)
-
-              if media_count <= 0:
-                  print("RESULT=FRESH_RUNNER_SESSION_FAILED")
-                  raise SystemExit(1)
-
-              print("RESULT=FRESH_RUNNER_SESSION_OK")
-              context.close()
-          PY
-
-          python3 /tmp/test_session.py
-
-      - name: Download one Google Photos item and upload to Koofr
+      - name: Test session, download one item, and upload to Koofr
         shell: bash
         run: |
           set -euo pipefail
@@ -144,6 +93,7 @@ jobs:
           cat > /tmp/test_transfer.py <<'PY'
           import hashlib
           import os
+          import time
           from pathlib import Path
           from playwright.sync_api import sync_playwright
 
@@ -163,15 +113,21 @@ jobs:
               page.goto("https://photos.google.com/", wait_until="domcontentloaded", timeout=120000)
               page.wait_for_timeout(8000)
 
+              print("URL =", page.url)
+              print("TITLE =", page.title())
               media = page.locator('a[href*="/photo/"], a[href*="/video/"]')
               count = media.count()
-              print("TRANSFER_MEDIA_FOUND =", count)
+              print("MEDIA_FOUND =", count)
               if count <= 0:
-                  raise SystemExit("No media found")
+                  print("RESULT=FRESH_RUNNER_SESSION_FAILED")
+                  raise SystemExit(1)
+              print("RESULT=FRESH_RUNNER_SESSION_OK")
 
-              href = media.first.get_attribute("href")
+              photos = page.locator('a[href*="/photo/"]')
+              target = photos.first if photos.count() else media.first
+              href = target.get_attribute("href")
               if not href:
-                  raise SystemExit("First media has no href")
+                  raise SystemExit("Target media has no href")
               if href.startswith("./"):
                   href = "https://photos.google.com/" + href[2:]
               elif href.startswith("/"):
@@ -181,26 +137,55 @@ jobs:
               page.goto(href, wait_until="domcontentloaded", timeout=120000)
               page.wait_for_timeout(3000)
 
-              with page.expect_download(timeout=120000) as info:
-                  page.keyboard.press("Shift+D")
-              download = info.value
-              filename = Path(download.suggested_filename).name
-              destination = outdir / filename
-              download.save_as(destination)
+              cdp = context.new_cdp_session(page)
+              cdp.send("Browser.setDownloadBehavior", {
+                  "behavior": "allow",
+                  "downloadPath": str(outdir),
+                  "eventsEnabled": True,
+              })
+
+              page.keyboard.press("Shift+D")
+
+              deadline = time.time() + 120
+              destination = None
+              last_size = -1
+              stable = 0
+              while time.time() < deadline:
+                  files = [
+                      f for f in outdir.iterdir()
+                      if f.is_file() and not f.name.endswith(".crdownload")
+                  ]
+                  if files:
+                      candidate = max(files, key=lambda f: f.stat().st_mtime)
+                      size = candidate.stat().st_size
+                      if size > 0 and size == last_size:
+                          stable += 1
+                      else:
+                          stable = 0
+                      last_size = size
+                      if stable >= 2:
+                          destination = candidate
+                          break
+                  time.sleep(1)
+
+              if destination is None:
+                  raise SystemExit("Download did not complete within 120 seconds")
 
               size = destination.stat().st_size
-              sha256 = hashlib.sha256(destination.read_bytes()).hexdigest()
-              print("DOWNLOAD_FILE =", filename)
+              h = hashlib.sha256()
+              with destination.open("rb") as fh:
+                  for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                      h.update(chunk)
+
+              print("DOWNLOAD_FILE =", destination.name)
               print("DOWNLOAD_SIZE =", size)
-              print("DOWNLOAD_SHA256 =", sha256)
-              if size <= 0:
-                  raise SystemExit("Downloaded file is empty")
+              print("DOWNLOAD_SHA256 =", h.hexdigest())
               context.close()
           PY
 
           python3 /tmp/test_transfer.py
 
-          FILE="$(find /tmp/gphotos-poc-download -maxdepth 1 -type f -print -quit)"
+          FILE="$(find /tmp/gphotos-poc-download -maxdepth 1 -type f ! -name '*.crdownload' -print -quit)"
           test -n "$FILE"
           BASENAME="$(basename "$FILE")"
           LOCAL_SIZE="$(stat -c %s "$FILE")"

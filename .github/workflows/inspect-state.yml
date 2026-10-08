@@ -32,5 +32,15 @@ jobs:
           sqlite3 /tmp/manifest.sqlite "select id,status,filename,size,remote from media order by uploaded_at desc limit 10;"
           echo "COUNT=$(sqlite3 /tmp/manifest.sqlite "select count(*) from media;")"
           rclone cat 'koofr_remote:/Google Photos/.gphotos-sync/daily-checkpoint.json'
+          A='koofr_remote:/Google Photos/Photos/2026/10/IMG_20261008_155013.jpg'
+          B='koofr_remote:/Google Photos/Photos/2026/10/IMG_20261008_155013__AF1QipPBTc50.jpg'
+          rclone copyto "$A" /tmp/a.jpg
+          rclone copyto "$B" /tmp/b.jpg
+          HA="$(sha256sum /tmp/a.jpg | awk '{print $1}')"
+          HB="$(sha256sum /tmp/b.jpg | awk '{print $1}')"
+          echo "DUPLICATE_HASH_EQUAL=$([ "$HA" = "$HB" ] && echo yes || echo no)"
+          test "$HA" = "$HB"
+          rclone deletefile "$B"
+          echo 'DUPLICATE_REMOVED=1'
           echo '--- PRODUCTION FILES ---'
           rclone lsl 'koofr_remote:/Google Photos/Photos'

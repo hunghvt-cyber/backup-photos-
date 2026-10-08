@@ -114,7 +114,7 @@ class Engine:
   elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
   self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}
  def reconcile(self):
-  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') or datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target
+  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') if st.get('status')=='PAUSED' else datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target
   with sync_playwright() as pw:
    c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page();p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(8000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')

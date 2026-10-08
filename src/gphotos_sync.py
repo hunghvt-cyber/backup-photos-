@@ -114,7 +114,7 @@ class Engine:
   elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
   self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}
  def reconcile(self):
-  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') or datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ');st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False
+  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') or datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target
   with sync_playwright() as pw:
    c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page();p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(8000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
@@ -122,13 +122,17 @@ class Engine:
     n=0
     for i,t,u,l,cr in self.visible(p):
      if i in seen:continue
-     seen.add(i);n+=1;self.db.touch(i,t,u,l,cr);self.db.seen(g,i)
-    nogrow=nogrow+1 if n==0 else 0
-    if nogrow>=3:complete=True;break
-    p.keyboard.press('End');p.wait_for_timeout(900)
+     seen.add(i)
+     if resuming:
+      if i==target:resuming=False;nogrow=0
+      continue
+     n+=1;last=i;self.db.touch(i,t,u,l,cr);self.db.seen(g,i)
+    if not resuming:nogrow=nogrow+1 if n==0 else 0
+    if not resuming and nogrow>=3:complete=True;break
+    p.keyboard.press('End');p.wait_for_timeout(200 if resuming else 900)
    try:c.close()
    except:pass
-  st.update({'status':'COMPLETE' if complete else 'PAUSED','updated_at':now(),'seen_this_run':len(seen),'report':self.db.report(g),'deletion_enabled':False});savej(sp,st);self.flush();cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json');rp=self.sd/f'reconcile-report-{g}.json';savej(rp,st);cmd('rclone','copyto',str(rp),f'{self.a.sroot}/logs/{rp.name}');return st
+  st.update({'status':'COMPLETE' if complete else 'PAUSED','updated_at':now(),'seen_this_run':len(seen),'resume_last_id':None if complete else last,'report':self.db.report(g),'deletion_enabled':False});savej(sp,st);self.flush();cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json');rp=self.sd/f'reconcile-report-{g}.json';savej(rp,st);cmd('rclone','copyto',str(rp),f'{self.a.sroot}/logs/{rp.name}');return st
 
 def main():
  a=argparse.ArgumentParser();a.add_argument('mode',choices=['daily','reconcile']);a.add_argument('--profile',default=os.path.expanduser('~/gphotos-profile'));a.add_argument('--chrome',default=os.environ.get('CHROME_BIN','/usr/bin/google-chrome-stable'));a.add_argument('--state',default='/tmp/gphotos-state');a.add_argument('--work',default='/tmp/gphotos-downloads');a.add_argument('--root',default='koofr_remote:/Google Photos/Photos');a.add_argument('--sroot',default='koofr_remote:/Google Photos/.gphotos-sync');a.add_argument('--seconds',type=int,default=int(os.environ.get('MAX_RUNTIME_SECONDS','16800')));a.add_argument('--maxitems',type=int,default=int(os.environ.get('MAX_ITEMS','1000')));x=a.parse_args();e=Engine(x)

@@ -1,47 +1,70 @@
 # Google Photos → Koofr
 
-One-way, resumable Google Photos backup designed for GitHub Actions.
+One-way, resumable backup of an existing Google Photos library to Koofr, designed for unattended GitHub Actions.
 
-## Design
+## Status
 
-- Google Photos is the source of truth.
-- Daily jobs are **incremental**: download only new media and upload originals to Koofr.
-- The runner is disposable. Persistent state belongs on Koofr under `.gphotos-sync/`.
-- Authentication uses a persistent Chromium profile created interactively (planned via GitHub Codespaces), never an automated Google password login.
-- Every successfully uploaded media item is recorded in a manifest from day one so a future full reconcile can detect deletions safely.
-- Deletion is **disabled in V1**. A quarterly reconcile will first be implemented in report-only mode; automatic deletion will require a complete inventory plus a grace period.
-- Filename is never the canonical identity of a Google Photos item.
+The foundation and production path have been proven on fresh GitHub-hosted runners:
 
-## Planned Koofr layout
+- restore an AES-256/PBKDF2 encrypted Chrome profile from Koofr;
+- open the authenticated Google Photos library headlessly;
+- enumerate opaque Google Photos media IDs;
+- trigger Google's official Download action;
+- replay the authenticated download request and obtain the real file;
+- compute SHA-256, upload through rclone/WebDAV, and verify remote byte size;
+- persist SQLite manifest and JSON checkpoint back to Koofr.
 
-```
+POC media was removed after validation. Production media is stored separately under `Google Photos/Photos/`.
+
+## Koofr layout
+
+```text
 /Google Photos/
   Photos/
+    YYYY/
+      MM/
+        original-file.ext
   .gphotos-sync/
+    auth/profile.tar.gz.enc
     manifest.sqlite
     daily-checkpoint.json
     reconcile-state.json
-    auth/profile.enc
     logs/
 ```
 
-## Delivery stages
+## Workflows
 
-1. **POC authentication** — create/refresh Chromium profile in Codespaces; restore it on a fresh GitHub runner.
-2. **POC transfer** — download one original Google Photos item and upload it to Koofr.
-3. **Daily incremental backup** — bounded runtime, retry/resume, manifest + checkpoint persisted to Koofr.
-4. **Quarterly reconcile** — resumable full inventory, report-only.
-5. **Safe deletion** — only after repeated/aged missing observations and a successfully completed inventory.
+**Daily backup** — `.github/workflows/daily.yml`
+
+Runs at 03:17 Vietnam time and can be started manually. During initial bootstrap it walks newest → oldest across repeated bounded runs. Once bootstrap is complete, later runs stop at the prior newest checkpoint.
+
+**Quarterly reconcile** — `.github/workflows/reconcile.yml`
+
+Runs at 02:41 Vietnam time on the first day of January, April, July and October. It inventories Google Photos into a reconcile generation and writes a report. V1 never deletes.
+
+Both workflows use the same concurrency group so they cannot mutate persistent state simultaneously.
+
+## Required GitHub Secrets
+
+- `KOOFR_USER`
+- `KOOFR_APP_PASSWORD`
+- `GPHOTOS_PROFILE_KEY`
+
+The profile encryption key must match `.gphotos-sync/auth/profile.tar.gz.enc`.
 
 ## Safety invariants
 
-- Never delete from Google Photos.
-- Never infer deletion from an incomplete scan.
-- Never delete from Koofr during daily backup.
-- Never mark an item synced before Koofr upload succeeds.
-- Never depend on GitHub Actions cache as the only copy of state.
-- Never commit browser profiles, cookies, credentials, rclone config, or runtime state.
+- Google Photos is the source of truth.
+- No code path deletes from Google Photos.
+- Daily backup never deletes from Koofr.
+- Reconcile V1 is report-only; deletion is not implemented.
+- Media identity is the opaque ID from `/photo/<id>` or `/video/<id>`, never filename.
+- An item becomes `uploaded` only after Koofr upload succeeds and remote size matches local size.
+- Duplicate filenames never overwrite an existing Koofr object; a short media-ID suffix is used.
+- Durable state lives on Koofr, not GitHub Actions cache.
+- Browser profiles, cookies, passwords and rclone config are never committed.
+- Jobs stop before the 5-hour runner limit so state can be flushed.
 
-## Current status
+## State recovery
 
-Repository reset from the previous prototype. The old implementation used mock downloads/uploads and assumed an unsupported scanner interface, so it was intentionally removed. V1 starts with authentication and one-file transfer POC before production sync is enabled.
+The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. State is flushed after every successful upload and again during final cleanup. If a run is interrupted, already committed items are skipped on the next run.

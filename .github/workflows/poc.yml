@@ -1,7 +1,6 @@
-name: Google Photos Auth POC
+name: Clean Google Photos POC files
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
@@ -10,46 +9,20 @@ permissions:
   contents: read
 
 jobs:
-  auth-poc:
+  cleanup-poc:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 10
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
-      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate required secrets
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$KOOFR_USER" || { echo "Missing KOOFR_USER"; exit 1; }
-          test -n "$KOOFR_APP_PASSWORD" || { echo "Missing KOOFR_APP_PASSWORD"; exit 1; }
-          test -n "$GPHOTOS_PROFILE_KEY" || { echo "Missing GPHOTOS_PROFILE_KEY"; exit 1; }
-
-      - name: Install runtime
-        shell: bash
+      - name: Install rclone
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y rclone
-          python3 -m pip install --upgrade pip
-          python3 -m pip install playwright
-
-          if command -v google-chrome-stable >/dev/null 2>&1; then
-            echo "CHROME_BIN=$(command -v google-chrome-stable)" >> "$GITHUB_ENV"
-          elif command -v google-chrome >/dev/null 2>&1; then
-            echo "CHROME_BIN=$(command -v google-chrome)" >> "$GITHUB_ENV"
-          else
-            echo "Google Chrome not found on runner"
-            exit 1
-          fi
 
       - name: Configure Koofr
-        shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.config/rclone"
@@ -64,148 +37,22 @@ jobs:
           } > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
 
-          rclone lsf "koofr_remote:/Google Photos/.gphotos-sync/auth"             --include "profile.tar.gz.enc"
-
-      - name: Restore encrypted Chrome profile
-        shell: bash
+      - name: Remove POC media only
         run: |
           set -euo pipefail
-          rm -rf "$HOME/gphotos-profile"
+          echo "Before cleanup:"
+          rclone lsf "koofr_remote:/Google Photos/POC" 2>/dev/null || true
+          rclone lsf "koofr_remote:/Google Photos/POC-Actions" 2>/dev/null || true
 
-          rclone copyto             "koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc"             /tmp/gphotos-profile.tar.gz.enc
+          rclone purge "koofr_remote:/Google Photos/POC" || true
+          rclone purge "koofr_remote:/Google Photos/POC-Actions" || true
 
-          openssl enc             -d             -aes-256-cbc             -pbkdf2             -iter 200000             -in /tmp/gphotos-profile.tar.gz.enc             -out /tmp/gphotos-profile.tar.gz             -pass env:GPHOTOS_PROFILE_KEY
+          echo "Verify protected state still exists:"
+          rclone lsf "koofr_remote:/Google Photos/.gphotos-sync/auth" --include "profile.tar.gz.enc"
+          test "$(rclone lsf "koofr_remote:/Google Photos/.gphotos-sync/auth" --include "profile.tar.gz.enc" | grep -c '^profile.tar.gz.enc$')" -eq 1
 
-          tar -xzf /tmp/gphotos-profile.tar.gz -C "$HOME"
-
-          rm -f             "$HOME/gphotos-profile/SingletonLock"             "$HOME/gphotos-profile/SingletonSocket"             "$HOME/gphotos-profile/SingletonCookie"
-
-          test -d "$HOME/gphotos-profile"
-          rm -f /tmp/gphotos-profile.tar.gz /tmp/gphotos-profile.tar.gz.enc
-
-      - name: Test session, download one item, and upload to Koofr
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/gphotos-poc-download
-          mkdir -p /tmp/gphotos-poc-download
-
-          cat > /tmp/test_transfer.py <<'PY'
-          import hashlib
-          import os
-          import time
-          from pathlib import Path
-          from playwright.sync_api import sync_playwright
-
-          profile = str(Path.home() / "gphotos-profile")
-          chrome = os.environ["CHROME_BIN"]
-          outdir = Path("/tmp/gphotos-poc-download")
-
-          with sync_playwright() as p:
-              context = p.chromium.launch_persistent_context(
-                  user_data_dir=profile,
-                  executable_path=chrome,
-                  headless=True,
-                  accept_downloads=True,
-                  args=["--disable-dev-shm-usage", "--no-first-run"],
-              )
-              page = context.pages[0] if context.pages else context.new_page()
-              page.goto("https://photos.google.com/", wait_until="domcontentloaded", timeout=120000)
-              page.wait_for_timeout(8000)
-
-              print("URL =", page.url)
-              print("TITLE =", page.title())
-              media = page.locator('a[href*="/photo/"], a[href*="/video/"]')
-              count = media.count()
-              print("MEDIA_FOUND =", count)
-              if count <= 0:
-                  print("RESULT=FRESH_RUNNER_SESSION_FAILED")
-                  raise SystemExit(1)
-              print("RESULT=FRESH_RUNNER_SESSION_OK")
-
-              photos = page.locator('a[href*="/photo/"]')
-              target = photos.first if photos.count() else media.first
-              href = target.get_attribute("href")
-              if not href:
-                  raise SystemExit("Target media has no href")
-              if href.startswith("./"):
-                  href = "https://photos.google.com/" + href[2:]
-              elif href.startswith("/"):
-                  href = "https://photos.google.com" + href
-
-              print("TRANSFER_TARGET =", href)
-              page.goto(href, wait_until="domcontentloaded", timeout=120000)
-              page.wait_for_timeout(3000)
-
-              with page.expect_request(
-                  lambda req: "usercontent.google.com" in req.url,
-                  timeout=120000,
-              ) as request_info:
-                  with page.expect_download(timeout=120000) as download_info:
-                      page.keyboard.press("Shift+D")
-
-              browser_request = request_info.value
-              download = download_info.value
-              download_url = browser_request.url
-              request_headers = browser_request.all_headers()
-              filename = Path(download.suggested_filename).name
-
-              from urllib.parse import urlparse
-              print("DOWNLOAD_URL_HOST =", urlparse(download_url).netloc)
-              print("DOWNLOAD_SUGGESTED_FILE =", filename)
-
-              # Replay the exact authenticated request Chrome emitted. Do not
-              # print request_headers: they may contain authentication data.
-              import urllib.request
-              safe_headers = {
-                  key: value
-                  for key, value in request_headers.items()
-                  if not key.startswith(":") and key.lower() not in {"host", "content-length"}
-              }
-              safe_headers["accept-encoding"] = "identity"
-              request = urllib.request.Request(download_url, headers=safe_headers)
-              destination = outdir / filename
-              with urllib.request.urlopen(request, timeout=120) as response:
-                  with destination.open("wb") as fh:
-                      while True:
-                          chunk = response.read(1024 * 1024)
-                          if not chunk:
-                              break
-                          fh.write(chunk)
-
-              size = destination.stat().st_size
-              h = hashlib.sha256()
-              with destination.open("rb") as fh:
-                  for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                      h.update(chunk)
-
-              print("DOWNLOAD_FILE =", destination.name)
-              print("DOWNLOAD_SIZE =", size)
-              print("DOWNLOAD_SHA256 =", h.hexdigest())
-              context.close()
-          PY
-
-          python3 /tmp/test_transfer.py
-
-          FILE="$(find /tmp/gphotos-poc-download -maxdepth 1 -type f ! -name '*.crdownload' -print -quit)"
-          test -n "$FILE"
-          BASENAME="$(basename "$FILE")"
-          LOCAL_SIZE="$(stat -c %s "$FILE")"
-
-          rclone copyto "$FILE" "koofr_remote:/Google Photos/POC-Actions/$BASENAME" --ignore-times -P
-
-          REMOTE_LINE="$(rclone lsl "koofr_remote:/Google Photos/POC-Actions/$BASENAME")"
-          echo "KOOFR_FILE = $REMOTE_LINE"
-          REMOTE_SIZE="$(printf '%s\\n' "$REMOTE_LINE" | awk '{print $1}')"
-          test "$LOCAL_SIZE" = "$REMOTE_SIZE"
-
-          echo "RESULT=FRESH_RUNNER_TRANSFER_OK"
+          echo "RESULT=POC_CLEANUP_OK"
 
       - name: Cleanup credentials
         if: always()
-        shell: bash
-        run: |
-          rm -rf "$HOME/gphotos-profile" || true
-          rm -f "$HOME/.config/rclone/rclone.conf" || true
-          rm -f /tmp/test_session.py /tmp/test_transfer.py || true
-          rm -rf /tmp/gphotos-poc-download || true
+        run: rm -f "$HOME/.config/rclone/rclone.conf" || true

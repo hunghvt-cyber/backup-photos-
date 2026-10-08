@@ -9,12 +9,6 @@ on:
         default: "1000"
   schedule:
     - cron: "17 20 * * *"
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "requirements.txt"
-      - ".github/workflows/daily.yml"
 
 permissions:
   contents: read
@@ -25,14 +19,14 @@ concurrency:
 
 jobs:
   daily:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
       MAX_RUNTIME_SECONDS: "16800"
-      MAX_ITEMS: ${{ github.event_name == 'push' && '3' || inputs.max_items || '1000' }}
+      MAX_ITEMS: ${{ inputs.max_items || '1000' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install runtime
@@ -75,6 +69,15 @@ jobs:
           rm -f /tmp/profile.enc /tmp/profile.tgz
       - name: Incremental backup
         run: python3 -m src.gphotos_sync daily
+      - name: Persist refreshed Chrome profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+          tar -C "$HOME" -czf /tmp/profile-refresh.tgz gphotos-profile
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in /tmp/profile-refresh.tgz -out /tmp/profile-refresh.enc -pass env:GPHOTOS_PROFILE_KEY
+          rclone copyto /tmp/profile-refresh.enc 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' --ignore-times
+          rm -f /tmp/profile-refresh.tgz /tmp/profile-refresh.enc
       - name: Cleanup worker credentials
         if: always()
         shell: bash

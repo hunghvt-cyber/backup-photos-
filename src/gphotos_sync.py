@@ -114,7 +114,7 @@ class Engine:
   elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
   self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}
  def reconcile(self):
-  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') if st.get('status')=='PAUSED' else datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target
+  sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') if st.get('status')=='PAUSED' else datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target;pending=0
   with sync_playwright() as pw:
    c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page();p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(8000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
@@ -126,8 +126,10 @@ class Engine:
      if resuming:
       if i==target:resuming=False;nogrow=0
       continue
-     n+=1;last=i;self.db.touch(i,t,u,l,cr);self.db.seen(g,i)
+     n+=1;pending+=1;last=i;self.db.touch(i,t,u,l,cr);self.db.seen(g,i)
     if not resuming:nogrow=nogrow+1 if n==0 else 0
+    if pending>=200:
+     st.update({'status':'PAUSED','updated_at':now(),'resume_last_id':last});savej(sp,st);self.flush();cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json');pending=0
     if not resuming and nogrow>=3:complete=True;break
     p.keyboard.press('End');p.wait_for_timeout(200 if resuming else 900)
    try:c.close()

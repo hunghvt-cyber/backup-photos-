@@ -72,7 +72,11 @@ jobs:
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
           rm -f /tmp/profile.enc /tmp/profile.tgz
       - name: Incremental backup
-        run: python3 -m src.gphotos_sync daily
+        id: backup
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -m src.gphotos_sync daily 2>&1 | tee "$RUNNER_TEMP/gphotos-daily.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -93,3 +97,51 @@ jobs:
         run: |
           rm -rf "$HOME/gphotos-profile" /tmp/gphotos-downloads /tmp/gphotos-state || true
           rm -f "$HOME/.config/rclone/rclone.conf" || true
+
+      - name: Daily health report
+        if: always()
+        shell: bash
+        env:
+          BACKUP_RESULT: ${{ steps.backup.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          from datetime import datetime, timezone
+          log = pathlib.Path(os.environ['RUNNER_TEMP']) / 'gphotos-daily.log'
+          content = log.read_text(errors='replace') if log.exists() else ''
+          summaries = [line[len('SUMMARY='):] for line in content.splitlines() if line.startswith('SUMMARY=')]
+          data = {}
+          if summaries:
+              try: data = json.loads(summaries[-1])
+              except ValueError: pass
+          status = 'SUCCESS' if os.environ.get('BACKUP_RESULT') == 'success' and data and data.get('errors', 0) == 0 else 'FAILED / INCOMPLETE'
+          report = {
+              'generated_at_utc': datetime.now(timezone.utc).isoformat(),
+              'status': status, 'backup_step': os.environ.get('BACKUP_RESULT', 'unknown'),
+              'run_id': os.environ.get('GITHUB_RUN_ID'),
+              'run_url': f"https://github.com/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{os.environ.get('GITHUB_RUN_ID')}",
+              'discovered': data.get('discovered'), 'attempted': data.get('attempted'),
+              'uploaded': data.get('uploaded'), 'skipped': data.get('skipped'),
+              'errors': data.get('errors'), 'boundary_seen': data.get('boundary_seen'),
+              'bootstrap_complete': data.get('checkpoint', {}).get('bootstrap_complete') if isinstance(data.get('checkpoint'), dict) else None,
+              'upload_error_lines': len(re.findall(r'^UPLOAD_ERROR', content, re.M)),
+              'summary_present': bool(data),
+          }
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'daily-health.json'
+          out.write_text(json.dumps(report, indent=2) + '\\n')
+          lines = ['## Google Photos daily health', '', f"**Status:** {status}", '',
+                   '| Metric | Value |', '|---|---|']
+          for key in ('generated_at_utc','discovered','attempted','uploaded','skipped','errors','boundary_seen','bootstrap_complete','summary_present'):
+              lines.append(f"| {key} | {report[key]} |")
+          lines.extend(['', f"[Open run]({report['run_url']})"])
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write('\\n'.join(lines) + '\\n')
+          print('DAILY_HEALTH=' + json.dumps(report))
+          PY
+      - name: Upload daily health artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-health-${{ github.run_id }}
+          path: ${{ runner.temp }}/daily-health.json
+          if-no-files-found: warn
+          retention-days: 90

@@ -71,7 +71,7 @@ class Engine:
  def download(self,pw,u,i):
   c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,accept_downloads=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
   try:
-   p.goto(u,wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(2500)
+   p.goto(u,wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(1500)
    with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
     with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
    r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
@@ -100,7 +100,17 @@ class Engine:
   if self.db.uploaded(i):self.stats['skipped']+=1;return
   self.stats['attempted']+=1;f=None
   try:
-   f,nm=self.download(pw,u,i);sz=f.stat().st_size;h=sha(f);r,exists=self.remote(cr,nm,i,h,sz)
+   for attempt in range(1,4):
+    try:
+     f,nm=self.download(pw,u,i)
+     break
+    except Exception as download_error:
+     message=str(download_error)
+     retryable=any(token in message.lower() for token in ('target page, context or browser has been closed','timeout','http error 403','forbidden','net::err'))
+     if not retryable or attempt==3 or self.left()<240:raise
+     print(f'DOWNLOAD_RETRY id={i} attempt={attempt} error={message[:180]}',flush=True)
+     time.sleep(min(attempt*2,5))
+   sz=f.stat().st_size;h=sha(f);r,exists=self.remote(cr,nm,i,h,sz)
    if not exists:cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')
    line=cmd('rclone','lsl',r,cap=True).stdout.strip();rz=int(line.split()[0]) if line else -1
    if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
@@ -111,7 +121,7 @@ class Engine:
  def scan(self,pw):
   c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
   try:
-   p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(6000)
+   p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(4000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
    for _ in range(len(self.seen)//15):
     p.keyboard.press('End');p.wait_for_timeout(700)

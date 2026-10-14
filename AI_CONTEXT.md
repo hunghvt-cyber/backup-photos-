@@ -13,6 +13,22 @@ Google Photos is always the source of truth. Koofr is the backup destination and
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
 
+## 2026-10-14 first historical backfill trial and fix
+
+- Manual run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38523118388
+- Result: failure; 5 offline tests passed, authentication restored, no
+  historical items reached. The engine retried a previously problematic media
+  item FIRST; `Download.save_as` closed Chrome. It then attempted to reuse
+  the dead browser for opening the gallery and crashed with `TargetClosedError`.
+- Fix: Backfill now traverses **historical media first** (no broken-media
+  preflight retry), restarts a closed Chrome context up to 3 times, and
+  checkpoints the already processed manifest and viewer position BEFORE
+  restarting. Exhausted retries fail with a structured status.
+- New restart test was added. **Not yet verified in a subsequent live run.**
+- Previously failed IDs remain in the existing manifest retry queue and should
+  be handled by a separate failure-retry phase in future development; avoid
+  blocking the main historical backfill on those IDs.
+
 ## 2026-10-14 historical backfill development (not yet live-tested)
 
 The October 14 Daily run `38510416865` discovered 13, skipped 12 and

@@ -6,6 +6,41 @@ The October 14 trial [run 38527073559](https://github.com/hunghvt-cyber/google-p
 
 The active workflow now invokes **`python3 -m src.gphotos_backfill_grid`**, whose runtime has not yet been confirmed through a live Actions run. Do not claim full library coverage or >100 images per run before observing actual logs.
 
+## Run 38531203749 and third-round fix (2026-10-14)
+
+[Manual run 38531203749](https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38531203749)
+was green at the GitHub job level, but only uploaded **3** images (2
+repeated HTTP 403/Chrome failures); it found **17** gallery media, of
+which 13 were already uploaded. Manifest count rose from 93 to **96**.
+The scan stopped after only six rounds, reporting
+`SCROLL_END_OR_STALLED`. This was not a full-library backup.
+
+Changes committed after the run:
+
+- Scan progress is based on **any previously unseen gallery media ID**,
+  including already uploaded photos, rather than only new upload
+  candidates. Thus long runs of previously backed-up photos will not
+  falsely stop historical traversal.
+- Gallery scrolling now detects the nearest scrollable ancestor of media
+  tiles (including hidden-overflow containers) and combines
+  `scroll_into_view_if_needed`, scrolling, mouse-wheel events and
+  periodic `PageDown`. A 1440×900 viewport improves thumbnail density.
+- `GRID_SCROLL_DIAG` logs scroll-container metadata every five
+  stagnant rounds, without disclosing filenames or image pixels.
+- If the browser stops exposing new IDs for 15 rounds,
+  `scan_status=SCROLL_STALLED` and the workflow exits as a failure,
+  even when some uploads succeed. This prevents misleading green jobs.
+- Previously failed HTTP 403 images are temporarily excluded from
+  historical upload batches; they remain safely tracked in the SQLite
+  manifest for a separately designed retry workflow.
+- Regression tests verify that the scanner traverses many already
+  uploaded items before concluding it is stalled.
+
+**Status: not yet verified by a new authenticated Chrome run.** Run
+`max_items=10` and inspect `GRID_SCAN`, `GRID_SCROLL_DIAG`,
+`GRID_QUEUE`, and `BACKFILL_SUMMARY`. Only raise to 100 when
+scanner-visible historical IDs grow past the first few dozen.
+
 ## Scheduled operation
 
 - Daily new-photo backup: 03:17 Vietnam time, unchanged.
@@ -38,9 +73,9 @@ The active workflow now invokes **`python3 -m src.gphotos_backfill_grid`**, whos
 
 The first phase aims for at least `max_items + 15` queued historical candidates
 before starting uploads, subject to the runner time budget and scrolling limits.
-The second phase attempts at most `max_items` media, with at most two old
-errors added at the end of the queue when there is spare capacity. A permanently
-broken download should not repeatedly block all historical progress.
+The second phase attempts at most `max_items` media, while old HTTP-403/error items are excluded from this backfill queue and remain
+tracked for a dedicated retry workflow. A permanently broken download must not
+repeatedly block historical progress.
 
 ## Durable Koofr state
 

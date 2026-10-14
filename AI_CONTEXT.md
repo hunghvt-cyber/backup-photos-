@@ -13,6 +13,38 @@ Google Photos is always the source of truth. Koofr is the backup destination and
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
 
+## 2026-10-14 budget-constrained unattended daily backfill
+
+User decision: progress gradually day-by-day **within free allocations**,
+prioritizing useful backups over long idle/broken runs. Avoid a permanent
+Codespace or a paid VPS. Google Photos cloud remains the only media source;
+no Takeout or device camera upload.
+
+Active `.github/workflows/backfill.yml` continues daily at 04:45 ICT,
+but now caps the whole job at **35 minutes**, the engine at **20 minutes**
+(`MAX_RUNTIME_SECONDS=1200`) and the virtual gallery scan at **3 minutes**
+(`MAX_SCAN_SECONDS=180`). `max_items=100` is an upper bound only, not
+a promise that 100 items are discovered or uploaded.
+
+`src/gphotos_backfill_grid.py` reports `scan_seconds`,
+`download_seconds`, `uploaded_per_hour`, and cumulative
+`manifest_uploaded_total`. The scanner fails on repeated stagnation;
+a zero-progress scan-budget run cannot falsely report success.
+Known perma-failed HTTP403 media are excluded from the backfill queue,
+but remain recorded as `error` for a future separate repair routine.
+Safety: no deletion, same Koofr manifest, no changes to the Daily cursor.
+
+**Do not promise zero cost solely from job caps.** GitHub Free's included
+Actions allowance is **2,000 min/month shared by the account's private
+repositories** (other Drive/Koofr workflows consume minutes). The user
+must inspect https://github.com/settings/billing and enable included
+usage alerts or enforce appropriate billing settings. GitHub Codespaces
+has a separate 120 core-hour monthly free quota but is not an unattended
+daily scheduler. This latest time-budget change has **not yet been
+verified by a live workflow run**. Wait for a new backfill run to inspect
+`GRID_SCAN` / `BACKFILL_SUMMARY` before increasing quotas.
+More details: `docs/BACKFILL.md`.
+
 ## State restoration safety improvement (2026-10-14)
 
 `Engine.restore` now stops immediately if Koofr `manifest.sqlite` or

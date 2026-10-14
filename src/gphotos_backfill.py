@@ -195,69 +195,96 @@ class Backfill:
                 print(f"BACKFILL_RETRY_OPEN_ERROR id={media_id} error={str(exc)[:200]}",
                       file=sys.stderr, flush=True)
 
+    def _crawl(self, page):
+        """Walk history only. Previously failed media are not allowed to kill the crawl."""
+        e = self.engine
+        if self.cursor.get("last_url"):
+            self.open_media(page, self.cursor["last_url"])
+            url = self.older(page, self.cursor["last_id"])
+            if not url:
+                return "NAVIGATION_STALLED"
+        else:
+            page.goto("https://photos.google.com/",
+                      wait_until="domcontentloaded", timeout=90000)
+            page.wait_for_timeout(4000)
+            tiles = page.locator(SEL)
+            if tiles.count() == 0:
+                raise RuntimeError("Google Photos session unavailable or empty gallery")
+            first = tiles.nth(0)
+            raw = first.get_attribute("href")
+            if not raw:
+                raise RuntimeError("First photo has no link")
+            url = self.open_media(page, href(raw))
+
+        while url and e.left() > 240 and self.stats["attempted"] < self.args.maxitems:
+            current = (self.open_media(page, url)
+                       if media_url(page.url) != media_url(url) else page.url)
+            item, kind = ident(current)
+            if item in self.visited:
+                return "NAVIGATION_LOOP"
+            self.visited.add(item)
+            self.process(page, item, kind, current)
+            # Advance after processing. Errors stay in manifest and are retryable.
+            # The durable cursor is committed after the manifest, not before.
+            self.cursor["last_id"] = item
+            self.cursor["last_url"] = current
+            self.cursor["visited_total"] = self.cursor.get("visited_total", 0) + 1
+            self.since_save += 1
+            if self.since_save >= 10:
+                self.persist("RUNNING")
+            if self.stats["attempted"] >= self.args.maxitems:
+                return "PAUSED_LIMIT"
+            if e.left() <= 240:
+                return "PAUSED_TIME"
+            url = self.older(page, item)
+            if not url:
+                return "NAVIGATION_STALLED"
+        return "PAUSED_TIME" if e.left() <= 240 else "PAUSED_LIMIT"
+
     def run(self):
         e = self.engine
-        status = "PAUSED"
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch_persistent_context(
-                user_data_dir=self.args.profile,
-                executable_path=self.args.chrome,
-                headless=True,
-                accept_downloads=True,
-                args=["--disable-dev-shm-usage", "--no-first-run"])
-            page = browser.pages[0] if browser.pages else browser.new_page()
-            try:
-                self.retry_known_errors(page)
-                if self.cursor.get("last_url"):
-                    self.open_media(page, self.cursor["last_url"])
-                    url = self.older(page, self.cursor["last_id"])
-                    if not url:
-                        status = "NAVIGATION_STALLED"
-                else:
-                    page.goto("https://photos.google.com/",
-                              wait_until="domcontentloaded", timeout=90000)
-                    page.wait_for_timeout(4000)
-                    tiles = page.locator(SEL)
-                    if tiles.count() == 0:
-                        raise RuntimeError("Google Photos session unavailable or empty gallery")
-                    first = tiles.nth(0)
-                    raw = first.get_attribute("href")
-                    if not raw:
-                        raise RuntimeError("First photo has no link")
-                    url = self.open_media(page, href(raw))
-                while url and e.left() > 240 and self.stats["attempted"] < self.args.maxitems:
-                    current = self.open_media(page, url) if media_url(page.url) != media_url(url) else page.url
-                    item, kind = ident(current)
-                    if item in self.visited:
-                        status = "NAVIGATION_LOOP"
-                        break
-                    self.visited.add(item)
-                    self.process(page, item, kind, current)
-                    # Even failed items remain in the manifest retry queue.
-                    self.cursor["last_id"] = item
-                    self.cursor["last_url"] = current
-                    self.cursor["visited_total"] = self.cursor.get("visited_total", 0) + 1
-                    self.since_save += 1
-                    if self.since_save >= 10:
-                        self.persist("RUNNING")
-                    if self.stats["attempted"] >= self.args.maxitems:
-                        status = "PAUSED_LIMIT"
-                        break
+        status = "FAILED"
+        try:
+            with sync_playwright() as playwright:
+                for restart in range(4):
                     if e.left() <= 240:
                         status = "PAUSED_TIME"
                         break
-                    url = self.older(page, item)
-                    if not url:
-                        status = "NAVIGATION_STALLED"
+                    browser = None
+                    try:
+                        print(f"BACKFILL_BROWSER_START attempt={restart + 1}", flush=True)
+                        browser = playwright.chromium.launch_persistent_context(
+                            user_data_dir=self.args.profile,
+                            executable_path=self.args.chrome,
+                            headless=True, accept_downloads=True,
+                            args=["--disable-dev-shm-usage", "--no-first-run"])
+                        page = browser.pages[0] if browser.pages else browser.new_page()
+                        status = self._crawl(page)
                         break
-                if e.left() <= 240 and status == "PAUSED":
-                    status = "PAUSED_TIME"
-            finally:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-        self.persist(status)
+                    except Exception as exc:
+                        closed = ("target page, context or browser has been closed"
+                                  in str(exc).lower()
+                                  or "browser has been closed" in str(exc).lower())
+                        if not closed:
+                            raise
+                        # Chrome can close on specific photos. Preserve the current
+                        # manifest/cursor, then reopen the saved profile to continue.
+                        print(f"BACKFILL_BROWSER_CLOSED attempt={restart + 1} "
+                              f"error={str(exc)[:220]}", file=sys.stderr, flush=True)
+                        self.persist("BROWSER_RESTART")
+                        if restart == 3:
+                            status = "FAILED_BROWSER_RESTARTS"
+                    finally:
+                        if browser is not None:
+                            try:
+                                browser.close()
+                            except Exception:
+                                pass
+            self.persist(status)
+        except Exception:
+            # Still write the safely completed prefix for the next run.
+            self.persist("FAILED")
+            raise
         pending = e.db.c.execute(
             "SELECT COUNT(*) FROM media WHERE status='error'").fetchone()[0]
         total = e.db.c.execute(
@@ -265,7 +292,6 @@ class Backfill:
         return {"status": status, **self.stats, "manifest_uploaded_total": total,
                 "pending_errors": pending, "backfill_cursor": self.cursor.get("last_id"),
                 "backfill_visited_total": self.cursor.get("visited_total", 0)}
-
 
 def main():
     parser = argparse.ArgumentParser()

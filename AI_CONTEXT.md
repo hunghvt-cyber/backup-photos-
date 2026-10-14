@@ -13,6 +13,13 @@ Google Photos is always the source of truth. Koofr is the backup destination and
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
 
+## State restoration safety improvement (2026-10-14)
+
+`Engine.restore` now stops immediately if Koofr `manifest.sqlite` or
+`daily-checkpoint.json` cannot be restored. Previously a transient restore
+failure could silently create an empty database and overwrite durable state.
+The optional and currently absent `reconcile-state.json` remains non-fatal.
+
 ## 2026-10-14 second Backfill trial and V2 Grid Scanner
 
 - Manual run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38527073559

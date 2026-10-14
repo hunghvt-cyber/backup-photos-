@@ -57,6 +57,10 @@ jobs:
             echo "pass = $PASS"
           } > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
+      - name: Validate backfill implementation
+        run: |
+          python3 -m compileall -q src tests
+          python3 -m unittest discover -s tests -v
       - name: Restore Chrome profile
         shell: bash
         run: |

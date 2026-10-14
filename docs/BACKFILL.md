@@ -1,91 +1,83 @@
-# Historical Google Photos backfill (experimental)
+# Google Photos Historical Backfill — Grid Scanner V2
 
-## Purpose
+## Current status
 
-The regular Daily workflow is for newly detected media only. Its
-`bootstrap_complete` flag **does not prove** that thousands of older photos
-have been inventoried or backed up. Historical backfill traverses photo-viewer
-navigation separately and writes to the same durable SQLite manifest on Koofr.
+The October 14 trial [run 38527073559](https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38527073559) failed. It uploaded 0 images, found 3 items, and looped in viewer navigation. Its manifest nevertheless confirmed **93 uploaded media** in total, and 6 errors still pending. The previous viewer-based downloader is kept as `src/gphotos_backfill.py` for investigation **but is not used by production Backfill workflow anymore**.
 
-## How to operate
+The active workflow now invokes **`python3 -m src.gphotos_backfill_grid`**, whose runtime has not yet been confirmed through a live Actions run. Do not claim full library coverage or >100 images per run before observing actual logs.
 
-- Workflow: [Google Photos Historical Backfill](../.github/workflows/backfill.yml)
-- Scheduled: 21:45 UTC = **04:45 Asia/Ho_Chi_Minh**, every day.
-- Runs independently from Daily (03:17 ICT), but shares the
-  `google-photos-koofr-state` concurrency group so they cannot update the
-  manifest or Chrome profile at the same time.
-- Default: **100 attempted downloads per run**; manually choose 100 initially
-  and 300 only after confirmed successful runs. Already-uploaded photos are
-  skipped without using the download quota.
-- Maximum per run: 240-minute GitHub Actions job and a 12,000-second engine
-  budget; the engine leaves time to re-encrypt and persist the Chrome profile.
-- Manual on mobile GitHub: Actions > Google Photos Historical Backfill >
-  Run workflow > choose max_items > Run workflow.
+## Scheduled operation
 
-## How it works
+- Daily new-photo backup: 03:17 Vietnam time, unchanged.
+- Historical Backfill: **04:45 Vietnam time** every day, manually dispatchable.
+- Manual trial: Actions > Google Photos Historical Backfill > Run workflow > branch `main` > `max_items=10`.
+- Default historical batch size: **100 attempted downloads**. Increase to 300 only after repeated verified success.
+- Runner timeout: 240 minutes; engine budget 200 minutes.
+- Concurrency group: `google-photos-koofr-state`; no overlap with Daily or quarterly Reconcile.
 
-1. Restore the authenticated Chrome profile and the manifest from Koofr.
-2. Prioritize historical traversal. Known error media stay in the manifest for
-   separate retry instead of crashing the historical discovery session.
-3. If `backfill-checkpoint.json` exists, reopen the last visited photo and
-   advance once to the older item. Otherwise start at the gallery's first item.
-4. Navigate photo-by-photo in **one** persistent Chrome context. Send
-   Google Photos' native `Shift+D` command and use Chrome's actual download
-   event and saved bytes. Unlike Daily, no second HTTP download replay.
-5. Check the SHA-256 of any existing destination filename, otherwise write
-   non-destructively with a media-ID suffix on collision. Upload using rclone
-   and check Koofr file size after upload.
-6. Save a durable SQLite manifest first, then backfill cursor, every ten
-   viewed items, before restarting a crashed browser, and at the end.
-   Failed media remain `status='error'` for retry.
-7. Report summary and cumulative manifest count in GitHub Actions Summary.
+## Two-phase design
 
-Backfill does **not** advance the Daily newest-item cursor, delete Photos or
-Koofr files, or blindly mark the entire historical library complete.
+1. Restore the persistent Chrome profile and SQLite manifest from Koofr.
+2. Open `photos.google.com` in **one persistent Chrome session**, collect visible
+   photo/video links and scroll the page. Scroll-container movement is logged
+   as `GRID_SCAN` with `round`, `visible`, `pending`, `old`,
+   `moved`, and `max_scroll`. Traverse past already-uploaded items to
+   discover historical images.
+3. Record all discovered media and statuses in SQLite, then **close the scanner
+   browser** before any downloads. This isolates UI scanning from crashes caused
+   by the native Google Photos download gesture.
+4. Upload queued media through the **original Daily engine**
+   `Engine.one()`, which has already succeeded in real runs. It uses an
+   independent browser per item, retries transient download failures, verifies
+   the remote Koofr size, and uses SQLite/media ID deduplication.
+5. Download operations in Historical Backfill invoke
+   `Engine.one(update_checkpoint=False)`, so the Daily newest-item cursor is
+   not advanced by historical uploads.
+6. Persist SQLite and `backfill-grid-checkpoint.json` to Koofr before the
+   download phase and after progress. Failed media stay in manifest for retry.
 
-## Durable state
+The first phase aims for at least `max_items + 15` queued historical candidates
+before starting uploads, subject to the runner time budget and scrolling limits.
+The second phase attempts at most `max_items` media, with at most two old
+errors added at the end of the queue when there is spare capacity. A permanently
+broken download should not repeatedly block all historical progress.
 
-- `Koofr:/Google Photos/.gphotos-sync/manifest.sqlite`: media statuses and
-  original capture metadata.
-- `Koofr:/Google Photos/.gphotos-sync/backfill-checkpoint.json`: last viewed
-  media ID, URL, status and cumulative viewer count.
-- `Koofr:/Google Photos/.gphotos-sync/daily-checkpoint.json`: daily cursor,
-  untouched by the backfill engine (except safe persistence of its same value).
-- `Koofr:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc`: encrypted
-  persistent Chrome profile.
+## Durable Koofr state
 
-## Limitations / release safety
+```
+/Google Photos/.gphotos-sync/
+  manifest.sqlite                 authoritative uploaded / seen / error status
+  daily-checkpoint.json           Daily cursor, preserved by historical uploads
+  backfill-grid-checkpoint.json   Historical scan status and progress
+  backfill-checkpoint.json        Legacy viewer-engine cursor; kept for rollback
+  auth/profile.tar.gz.enc         encrypted Google Chrome profile
+```
 
-First manual trial `38523118388` on 2026-10-14 failed before historical
-traversal: the preflight retry of a previously broken media item closed Chrome.
-The engine has since been changed to **prioritize history**, reopen Chrome up to
-three times after unexpected closure, and preserve state between attempts.
-These changes still require a second live run for validation.
+No historical job deletes photos or changes the daily schedule. The scan-based
+progress cursor is **not proof of end-of-library coverage**; repeated passes
+against the Photos web UI and quarterly inventory checks are still important.
 
-This is a new downloader path and must be validated on real authenticated
-Google Photos pages. Unit tests cannot prove UI navigation works.
-If Google Photos changes its navigation or download shortcut, the workflow
-reports `NAVIGATION_STALLED` or an error rather than falsely claiming all
-history has been backed up.
+## Reading results
 
-A successful limit-based run will report `PAUSED_LIMIT`; this means the
-backfill is **in progress**, not that synchronization is complete. An
-unsupported navigation state does not imply the oldest item was reached.
+`BACKFILL_SUMMARY` and GitHub Actions Summary contain:
 
-The backfill can use significant GitHub Actions runner minutes. Monitor
-repository Actions usage and Koofr storage as throughput rises. Full-library
-coverage cannot be asserted until a verified independent inventory is available.
+- `uploaded`: successful uploads this run.
+- `attempted`: attempted downloads this run.
+- `discovered`: unique items found on the gallery in this run (including those previously uploaded).
+- `scan_rounds`, `unique_visible`: diagnostics of library traversal.
+- `pending_seen`: discovered but not uploaded records.
+- `pending_errors`: failed records still in the manifest.
+- `manifest_uploaded_total`: cumulative number of uploaded media recorded in the SQLite manifest.
+- `SCAN_INCOMPLETE`: scanning stopped or reached an unverified boundary, **not** a declaration that all photos are backed up.
+- `PAUSED_LIMIT`: reached the requested download batch size.
 
-## Prior art
+The new scanner path must first be validated with `max_items=10`. Inspect
+the `GRID_SCAN` movement and `GRID_QUEUE` count; if it finds only 10–20
+media while thousands should exist, do not increase the download quota.
+Fix the gallery scroll selector or use another inventory method first.
 
-Ideas are based on (not a wholesale import of) the following public projects:
+## Reference projects
 
-- https://github.com/vikas5914/google-photos-backup — Playwright browser viewer
-  traversal and durable `.lastdone` resume.
-- https://github.com/jpratt9/gphotos-export — retried original-quality downloads,
-  EXIF dates, resumable history, and separate backward traversal.
-- https://github.com/perkeep/gphotos-cdp — Chrome DevTools Protocol downloader
-  with durable historical media position.
-
-The historical backfill implementation is specific to the existing private
-GitHub Actions + Koofr architecture and reuses the original SQLite manifest.
+- https://github.com/vikas5914/google-photos-backup
+- https://github.com/jpratt9/gphotos-export
+- https://github.com/perkeep/gphotos-cdp

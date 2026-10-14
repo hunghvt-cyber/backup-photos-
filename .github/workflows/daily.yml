@@ -128,13 +128,13 @@ jobs:
               'summary_present': bool(data),
           }
           out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'daily-health.json'
-          out.write_text(json.dumps(report, indent=2) + '\\n')
+          out.write_text(json.dumps(report, indent=2) + '\n')
           lines = ['## Google Photos daily health', '', f"**Status:** {status}", '',
                    '| Metric | Value |', '|---|---|']
           for key in ('generated_at_utc','discovered','attempted','uploaded','skipped','errors','boundary_seen','bootstrap_complete','summary_present'):
               lines.append(f"| {key} | {report[key]} |")
           lines.extend(['', f"[Open run]({report['run_url']})"])
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write('\\n'.join(lines) + '\\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write('\n'.join(lines) + '\n')
           print('DAILY_HEALTH=' + json.dumps(report))
           PY
       - name: Upload daily health artifact

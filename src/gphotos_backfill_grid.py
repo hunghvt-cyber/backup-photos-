@@ -130,6 +130,8 @@ class GridBackfill:
         self.scan_rounds = 0
         self.scan_status = "NOT_STARTED"
         self.anchor_id = None
+        self.scan_seconds = 0
+        self.download_seconds = 0
 
     def persist(self, status):
         e = self.engine
@@ -162,6 +164,10 @@ class GridBackfill:
             self.scan_status = "TIME_BUDGET_LOW"
             return
         browser = None
+        scan_started = time.monotonic()
+        scan_budget = max(60, int(os.environ.get("MAX_SCAN_SECONDS", "180")))
+        print(f"GRID_SCAN_BUDGET seconds={scan_budget} max_items={self.args.maxitems}",
+              flush=True)
         try:
             browser = playwright.chromium.launch_persistent_context(
                 user_data_dir=self.args.profile, executable_path=self.args.chrome,
@@ -177,6 +183,9 @@ class GridBackfill:
             for turn in range(1200):
                 if e.left() < 360:
                     self.scan_status = "TIME_BUDGET_LOW"
+                    break
+                if time.monotonic() - scan_started >= scan_budget:
+                    self.scan_status = "SCAN_BUDGET"
                     break
                 self.scan_rounds += 1
                 raw = page.locator(SEL).evaluate_all(VISIBLE_JS)
@@ -228,6 +237,10 @@ class GridBackfill:
             print("GRID_SCAN_ERROR=" + repr(exc), file=sys.stderr, flush=True)
             # Preserve already discovered media and allow processing queued items.
         finally:
+            self.scan_seconds = round(time.monotonic() - scan_started, 2)
+            print(f"GRID_SCAN_END status={self.scan_status} seconds={self.scan_seconds} "
+                  f"unique={len(self.scanned_unique)} queued={len(self.pending)}",
+                  flush=True)
             if browser is not None:
                 try:
                     browser.close()
@@ -264,6 +277,7 @@ class GridBackfill:
                 pending = self.queue()
                 print(f"GRID_QUEUE count={len(pending)} max_items={self.args.maxitems} "
                       f"scan_status={self.scan_status}", flush=True)
+                download_started = time.monotonic()
                 for index, (media_id, media_type, url, label, capture) in enumerate(pending, 1):
                     if e.left() < 300 or self.stats["attempted"] >= self.args.maxitems:
                         break
@@ -275,6 +289,7 @@ class GridBackfill:
                           update_checkpoint=False)
                     if index % 10 == 0:
                         self.persist("UPLOADING")
+                self.download_seconds = round(time.monotonic() - download_started, 2)
             if self.stats["attempted"] >= self.args.maxitems:
                 status = "PAUSED_LIMIT"
             elif e.left() < 300:
@@ -294,6 +309,10 @@ class GridBackfill:
             "pending_seen": self.state["pending_seen"],
             "pending_errors": self.state["pending_errors"],
             "scan_rounds": self.scan_rounds,
+            "scan_seconds": self.scan_seconds,
+            "download_seconds": self.download_seconds,
+            "uploaded_per_hour": round(3600 * self.stats["uploaded"]
+                                       / max(1, self.download_seconds), 2),
             "unique_visible": len(self.scanned_unique),
             "runs": self.state["runs"],
         }

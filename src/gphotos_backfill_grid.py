@@ -20,23 +20,70 @@ from playwright.sync_api import sync_playwright
 from src.gphotos_sync import Engine, SEL, cmd, created, href, ident, now, savej
 
 SCROLL_JS = r"""() => {
+  // The Photos timeline is virtualized. The document root may have a tiny
+  // scrollbar while a nested ancestor owns the actual gallery scroll.
+  const tile = document.querySelector('a[href*="/photo/"],a[href*="/video/"]');
+  const ancestors = [];
+  for (let el = tile; el; el = el.parentElement) ancestors.push(el);
   const root = document.scrollingElement || document.documentElement;
-  let target = root;
-  let best = Math.max(0, root.scrollHeight - root.clientHeight);
-  for (const el of document.querySelectorAll('div, main, section')) {
-    const extra = el.scrollHeight - el.clientHeight;
-    if (extra <= best || extra < 100) continue;
+  const extras = Array.from(document.querySelectorAll(
+    '[role="main"],main,[role="grid"],[style*="overflow"],div'));
+  const candidates = Array.from(new Set([...ancestors, root, ...extras]));
+  const choices = [];
+  for (const el of candidates) {
+    const max = el.scrollHeight - el.clientHeight;
+    if (max < 90 || el.clientHeight < 100) continue;
     const style = getComputedStyle(el);
-    if (!/(auto|scroll|overlay)/.test(style.overflowY)) continue;
-    target = el;
-    best = extra;
+    const score =
+        (ancestors.includes(el) ? 1000 : 0) +
+        (/(auto|scroll|overlay)/.test(style.overflowY) ? 100 : 0) +
+        Math.min(max / 100, 100);
+    choices.push({el, max, score, overflow: style.overflowY});
   }
-  const before = target.scrollTop;
-  const step = Math.max(750, Math.round(target.clientHeight * 0.78));
-  target.scrollTop = Math.min(best, before + step);
-  return {before: before, after: target.scrollTop, max: best,
-          tag: target.tagName, step: step};
+  choices.sort((a, b) => b.score - a.score);
+  const diagnostics = choices.slice(0, 5).map(x => ({
+    tag: x.el.tagName, className: String(x.el.className || '').slice(0, 90),
+    top: Math.round(x.el.scrollTop), max: Math.round(x.max),
+    client: Math.round(x.el.clientHeight), overflow: x.overflow
+  }));
+  let chosen = null;
+  for (const x of choices) {
+    const before = x.el.scrollTop;
+    const step = Math.max(450, Math.round(x.el.clientHeight * 0.75));
+    x.el.scrollTop = Math.min(x.max, before + step);
+    const after = x.el.scrollTop;
+    if (after > before + 1) {
+      chosen = {before, after, max: x.max, tag: x.el.tagName, step};
+      break;
+    }
+  }
+  return {moved: Boolean(chosen), ...(chosen || {
+    before: 0, after: 0, max: 0, step: 0, tag: null
+  }), diagnostics};
 }"""
+
+def advance_gallery(page, iteration):
+    """Combine native wheel/keyboard events with nested scrolling.
+
+    React virtualized galleries may ignore scrollTop changes without native
+    wheel/keyboard signals. This is intentionally independent from download
+    code, and never clicks thumbnails or changes browser URL.
+    """
+    anchors = page.locator(SEL)
+    if anchors.count():
+        last = anchors.last
+        try:
+            last.scroll_into_view_if_needed(timeout=4000)
+        except Exception:
+            pass
+    metrics = page.evaluate(SCROLL_JS)
+    # Wheel must be delivered over the gallery, not over the sidebar.
+    page.mouse.move(650, 520)
+    page.mouse.wheel(0, 650 + (iteration % 3) * 200)
+    if iteration % 3 == 2:
+        page.keyboard.press("PageDown")
+    page.wait_for_timeout(1100 if metrics["moved"] else 1600)
+    return metrics
 
 VISIBLE_JS = r"""elements => elements.map(el => ({
   href: el.getAttribute('href'),
@@ -120,25 +167,26 @@ class GridBackfill:
                 user_data_dir=self.args.profile, executable_path=self.args.chrome,
                 headless=True, args=["--disable-dev-shm-usage", "--no-first-run"])
             page = browser.pages[0] if browser.pages else browser.new_page()
+            page.set_viewport_size({"width": 1440, "height": 900})
             page.goto("https://photos.google.com/", wait_until="domcontentloaded",
                       timeout=90000)
-            page.wait_for_timeout(4000)
-            seen_rounds = 0
-            stuck_rounds = 0
-            old_count = 0
+            page.wait_for_timeout(5000)
+            rounds_without_new_ids = 0
+            already_uploaded = 0
             target = max(self.args.maxitems + 15, 25)
-            for turn in range(1500):
+            for turn in range(1200):
                 if e.left() < 360:
                     self.scan_status = "TIME_BUDGET_LOW"
                     break
                 self.scan_rounds += 1
                 raw = page.locator(SEL).evaluate_all(VISIBLE_JS)
                 items = parse_tiles(raw)
-                new_this_round = 0
+                new_ids = 0
                 for media_id, media_type, url, label, capture in items:
                     if media_id in self.scanned_unique:
                         continue
                     self.scanned_unique.add(media_id)
+                    new_ids += 1
                     self.anchor_id = media_id
                     self.stats["discovered"] += 1
                     prior = e.db.c.execute(
@@ -146,31 +194,31 @@ class GridBackfill:
                     e.db.touch(media_id, media_type, url, label, capture)
                     if not prior or prior[0] == "seen":
                         self.pending[media_id] = (media_id, media_type, url, label, capture)
-                        new_this_round += 1
                     elif prior[0] == "uploaded":
-                        old_count += 1
-                    # Previously failed images are retried after fresh historical media.
+                        already_uploaded += 1
+                    # Broken historical photos stay in the error queue.
                 if len(self.pending) >= target:
                     self.scan_status = "BATCH_READY"
                     break
-                scroll = page.evaluate(SCROLL_JS)
-                if scroll["after"] <= scroll["before"] + 1:
-                    # A mouse wheel also notifies virtualized React scroll handlers.
-                    page.mouse.wheel(0, 1250)
-                    stuck_rounds += 1
-                else:
-                    stuck_rounds = 0
-                seen_rounds = seen_rounds + 1 if new_this_round == 0 else 0
-                if turn % 10 == 0 or new_this_round > 0:
-                    print(f"GRID_SCAN round={turn + 1} visible={len(items)} "
-                          f"seen={len(self.scanned_unique)} pending={len(self.pending)} "
-                          f"old={old_count} moved={scroll['after'] - scroll['before']:.0f} "
-                          f"max_scroll={scroll['max']:.0f}", flush=True)
-                if stuck_rounds >= 5 and seen_rounds >= 5:
-                    # Not proof that the Google Photos library has been fully scanned.
-                    self.scan_status = "SCROLL_END_OR_STALLED"
+                rounds_without_new_ids = (
+                    0 if new_ids else rounds_without_new_ids + 1)
+                metrics = advance_gallery(page, turn)
+                if turn == 0 or new_ids or turn % 5 == 0:
+                    print(
+                        f"GRID_SCAN round={turn + 1} visible={len(items)} "
+                        f"seen={len(self.scanned_unique)} new_ids={new_ids} "
+                        f"pending={len(self.pending)} old={already_uploaded} "
+                        f"moved={metrics['after'] - metrics['before']:.0f} "
+                        f"max_scroll={metrics['max']:.0f} "
+                        f"stagnant={rounds_without_new_ids}", flush=True)
+                if turn == 0 or (rounds_without_new_ids >= 5
+                                 and rounds_without_new_ids % 5 == 0):
+                    # Only DOM scrolling metadata, no photo filenames or pixels.
+                    print("GRID_SCROLL_DIAG=" + json.dumps(
+                        metrics["diagnostics"]), flush=True)
+                if rounds_without_new_ids >= 15:
+                    self.scan_status = "SCROLL_STALLED"
                     break
-                page.wait_for_timeout(500 if new_this_round else 750)
             else:
                 self.scan_status = "MAX_SCAN_ROUNDS"
             if not self.scanned_unique:
@@ -201,14 +249,8 @@ class GridBackfill:
                     wanted.add(row[0])
                 if len(candidates) >= budget:
                     break
-        # Include at most two old errors only when there is spare capacity.
-        if len(candidates) < budget:
-            for row in self.engine.db.c.execute(
-                "SELECT id,type,url,label,created FROM media "
-                "WHERE status='error' ORDER BY last_seen ASC LIMIT 2"):
-                if row[0] not in wanted:
-                    candidates.append(row)
-                    wanted.add(row[0])
+        # Repeated HTTP-403 media are kept in the manifest for a dedicated
+        # retry workflow, but must not consume the historical backfill quota.
         return candidates[:budget]
 
     def run(self):
@@ -278,10 +320,11 @@ def main():
         # or when every attempted download failed. Partial successes remain visible.
         all_failed = (summary["attempted"] > 0 and summary["uploaded"] == 0
                       and summary["errors"] > 0)
-        no_progress = summary["attempted"] == 0 and (
-            summary["scan_status"] == "SCAN_ERROR" or
-            summary["scan_status"] == "SCROLL_END_OR_STALLED")
-        return 2 if all_failed or no_progress else 0
+        scan_failed = summary["scan_status"] in (
+            "SCAN_ERROR", "SCROLL_STALLED", "MAX_SCAN_ROUNDS")
+        # Some uploads may succeed even if the scanner stalls. Still report
+        # a failing run: the user's historical library is NOT fully covered.
+        return 2 if all_failed or scan_failed else 0
     finally:
         try:
             job.engine.db.c.close()

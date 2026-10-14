@@ -13,6 +13,34 @@ Google Photos is always the source of truth. Koofr is the backup destination and
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
 
+## 2026-10-14 second Backfill trial and V2 Grid Scanner
+
+- Manual run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38527073559
+- Outcome: FAILED. Scanned 3 items, attempted 2, uploaded 0, skipped 1,
+  errors 2, `NAVIGATION_LOOP`. Manifest cumulative uploaded=93;
+  pending_errors=6; legacy viewer visited_total=35.
+- Viewer-path download hit Chrome closure and then Playwright timeout.
+  A Chrome restart succeeded but the left/right viewer navigation did not
+  traverse historical photos reliably.
+- Changed production `.github/workflows/backfill.yml` to invoke
+  `src/gphotos_backfill_grid.py` (new two-phase design):
+  1. single persistent Chrome browser scans virtualized gallery via scroll,
+     records all discovered media IDs in SQLite, logs visible/count/movement;
+  2. closes the scanner browser, then uses existing proven `Engine.one()`
+     downloader for up to 100 attempted images by default, with isolated
+     Chrome per item and Koofr verification.
+- `Engine.one(...,update_checkpoint=False)` preserves the Daily state cursor
+  during historical backfill. Both phases share manifest and concurrency key.
+- Writes `backfill-grid-checkpoint.json` on Koofr, manifest committed first.
+  Previous `backfill-checkpoint.json` from viewer engine preserved as
+  legacy/rollback. No deletion of Photos/Koofr data.
+- New offline tests in `tests/test_gphotos_backfill_grid.py`.
+- **V2 not yet live-tested**; next manual workflow test with max_items=10
+  should check `GRID_SCAN`, `GRID_QUEUE`, `BACKFILL_SUMMARY`. Do NOT
+  assume 100+ throughput until verified. If scan shows no scroll movement
+  and only 10-20 visible items, fix scrolling before raising the quota.
+- Docs: `docs/BACKFILL.md`.
+
 ## 2026-10-14 first historical backfill trial and fix
 
 - Manual run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38523118388

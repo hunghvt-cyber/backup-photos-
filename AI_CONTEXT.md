@@ -368,3 +368,7 @@ A healthy daily system means:
 - no unexpected deletion occurs.
 
 When debugging, protect correctness and recoverability before optimizing speed.
+
+## Homepage backup reporting (2026-10-14)
+
+Daily workflow additionally converts its existing daily-health.json into a sanitized schema v1 report and publishes gphotos-backup-latest.json to a dedicated public Vercel Blob store. Requires optional GitHub Actions secret BLOB_READ_WRITE_TOKEN. Publishing is best-effort; never changes backup success, manifest/checkpoint or Koofr state. Central contract and troubleshooting: https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/BACKUP-REPORTING.md . No repository_dispatch or cross-repo GitHub token.

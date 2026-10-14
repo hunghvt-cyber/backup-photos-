@@ -20,6 +20,27 @@ Normal operation must not require a PC, Codespaces, or an always-on server.
 failure could silently create an empty database and overwrite durable state.
 The optional and currently absent `reconcile-state.json` remains non-fatal.
 
+## 2026-10-14 third trial and scrolling fix (unverified)
+
+- Run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38531203749
+- GitHub job SUCCESS but library backfill not successful:
+  `discovered=17, attempted=5, uploaded=3, errors=2`,
+  `scan_status=SCROLL_END_OR_STALLED` after 6 rounds, total manifest uploaded=96.
+  Two previously broken media failed with HTTP 403 / Chrome closure.
+- Updated `src/gphotos_backfill_grid.py` to scan beyond already backed-up
+  media, combining last-tile scroll-into-view, ancestor/container scroll,
+  native wheel and PageDown. Logs `GRID_SCROLL_DIAG` with DOM scroll metrics.
+  A 15-round stagnant scanner is now a FAILURE rather than green status.
+- Old hard-error media are not retried during routine historical backfill,
+  remaining safely in manifest for a separate repair queue.
+- Added regression tests for navigation past previously uploaded media.
+- Updated documentation at `docs/BACKFILL.md`.
+- Next manual test should use max_items=10, inspect `GRID_SCAN` counts.
+  Do NOT raise to 100 until new scanner discovers at least dozens of unique
+  historical media in a real run.
+- No completed entire-library inventory or speed benchmark yet; 96 is total
+  manifest uploaded as at that run, not a claimed total photo library size.
+
 ## 2026-10-14 second Backfill trial and V2 Grid Scanner
 
 - Manual run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38527073559

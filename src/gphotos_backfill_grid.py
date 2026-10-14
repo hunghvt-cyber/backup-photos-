@@ -232,7 +232,8 @@ class GridBackfill:
                           flush=True)
                     # Reuse the downloader already proven by Daily backup,
                     # including its independent Chrome session and HTTP replay.
-                    e.one(playwright, media_id, media_type, url, label, capture)
+                    e.one(playwright, media_id, media_type, url, label, capture,
+                          update_checkpoint=False)
                     if index % 10 == 0:
                         self.persist("UPLOADING")
             if self.stats["attempted"] >= self.args.maxitems:

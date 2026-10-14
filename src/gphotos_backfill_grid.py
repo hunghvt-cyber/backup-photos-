@@ -170,9 +170,6 @@ class GridBackfill:
                     # Not proof that the Google Photos library has been fully scanned.
                     self.scan_status = "SCROLL_END_OR_STALLED"
                     break
-                if seen_rounds >= 35:
-                    self.scan_status = "NO_NEW_MEDIA_35_SCROLLS"
-                    break
                 page.wait_for_timeout(500 if new_this_round else 750)
             else:
                 self.scan_status = "MAX_SCAN_ROUNDS"

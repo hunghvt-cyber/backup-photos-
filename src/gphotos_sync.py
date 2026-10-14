@@ -53,8 +53,12 @@ class Engine:
   except:return d
  def restore(self):
   for n in ('manifest.sqlite','daily-checkpoint.json','reconcile-state.json'):
-   r=cmd('rclone','copyto',f'{self.a.sroot}/{n}',str(self.sd/n),ok=False)
-   if r.returncode:(self.sd/n).unlink(missing_ok=True)
+   r=cmd('rclone','copyto',f'{self.a.sroot}/{n}',str(self.sd/n),ok=False,cap=True)
+   if r.returncode:
+    (self.sd/n).unlink(missing_ok=True)
+    if n in ('manifest.sqlite','daily-checkpoint.json'):
+     raise RuntimeError(f'Required Koofr state {n} cannot be restored; refusing to reset production manifest/checkpoint')
+    print(f'OPTIONAL_STATE_MISSING file={n}',flush=True)
  def flush(self):
   self.db.c.commit(); snap=self.sd/'manifest.snapshot.sqlite'; self.db.snapshot(snap); savej(self.sd/'daily-checkpoint.json',self.cp); cmd('rclone','copyto',str(snap),f'{self.a.sroot}/manifest.sqlite','--ignore-times'); cmd('rclone','copyto',str(self.sd/'daily-checkpoint.json'),f'{self.a.sroot}/daily-checkpoint.json','--ignore-times'); snap.unlink(missing_ok=True)
  def left(self):return self.a.seconds-int(time.monotonic()-self.start)

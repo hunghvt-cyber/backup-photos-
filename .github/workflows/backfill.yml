@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 -m src.gphotos_backfill 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          python3 -m src.gphotos_backfill_grid 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -108,7 +108,7 @@ jobs:
           candidates = [x.split('BACKFILL_SUMMARY=', 1)[1] for x in lines if 'BACKFILL_SUMMARY=' in x]
           if candidates:
               d = json.loads(candidates[-1])
-              keys = ('status','discovered','attempted','uploaded','skipped','errors','manifest_uploaded_total','pending_errors','backfill_visited_total')
+              keys = ('status','scan_status','scan_rounds','unique_visible','discovered','attempted','uploaded','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
               report = ['## Google Photos Historical Backfill','', '| Metric | Value |','|---|---|']
               report += [f'| {k} | {d.get(k, "N/A")} |' for k in keys]
           else:

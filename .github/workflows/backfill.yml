@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       max_items:
-        description: "Maximum historical images/videos to attempt (100 recommended initially)"
+        description: "Maximum historical images/videos to attempt (up to 100, subject to time budget)"
         required: false
         default: "100"
   schedule:
@@ -20,12 +20,13 @@ concurrency:
 jobs:
   backfill:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 35
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "12000"
+      MAX_RUNTIME_SECONDS: "1200"
+      MAX_SCAN_SECONDS: "180"
       MAX_ITEMS: ${{ inputs.max_items || '100' }}
     steps:
       - uses: actions/checkout@v4

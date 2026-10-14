@@ -74,3 +74,9 @@ The profile encryption key must match `.gphotos-sync/auth/profile.tar.gz.enc`.
 The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. SQLite runs in WAL mode locally, so production creates a consistent snapshot with SQLite's Backup API before uploading the remote manifest. State is flushed after every successful upload and again during final cleanup. If a run is interrupted, already committed items are skipped on the next run.
 
 If manifest state is missing but a candidate Koofr object already exists, production compares size and SHA-256 and can reconstruct the manifest instead of creating a duplicate.
+
+## Homepage backup report (Vercel Blob)
+
+After each daily run, the workflow generates a **sanitized public JSON report** from its existing local log/health artifact and publishes it to a dedicated public Vercel Blob store. Publication is best-effort and does not change the backup result. Configure the repository Actions secret `BLOB_READ_WRITE_TOKEN` for that store; no GitHub cross-repository token is needed. If the secret is missing, the step skips with a notice. Never publish raw logs, file names, or credentials.
+
+Source of truth for schema, URL configuration, setup, troubleshooting and AI handover: [Homepage-nas/docs/BACKUP-REPORTING.md](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/BACKUP-REPORTING.md).

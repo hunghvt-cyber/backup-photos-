@@ -2,7 +2,7 @@
 import json, os, sys
 from pathlib import Path
 from datetime import datetime
-from vercel.blob import BlobClient
+from vercel.blob import put
 
 def main():
     if len(sys.argv)!=3:
@@ -25,8 +25,7 @@ def main():
     payload=(json.dumps(report,ensure_ascii=False,separators=(",",":"))+"\n").encode()
     if len(payload)>8192:
         raise ValueError("Public report too large")
-    client=BlobClient(token=token)
-    result=client.put(pathname,payload,access="public",add_random_suffix=False,overwrite=True,content_type="application/json",cache_control_max_age=60)
+    result=put(pathname,payload,access="public",add_random_suffix=False,overwrite=True,content_type="application/json",cache_control_max_age=60,token=token,multipart=False)
     print("Published",pathname,"to",result.url)
 
 if __name__=="__main__":

@@ -2,7 +2,7 @@
 
 > Read this file first when continuing development with another AI or in a new conversation.
 > Repository: `hunghvt-cyber/google-photos-koofr`
-> Last updated: 2026-10-08
+> Last updated: 2026-10-14
 > Production status: operational
 
 ## 1. Goal
@@ -12,6 +12,37 @@ Build and maintain an unattended, one-way Google Photos → Koofr backup system 
 Google Photos is always the source of truth. Koofr is the backup destination and durable state store.
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
+
+## 2026-10-14 historical backfill development (not yet live-tested)
+
+The October 14 Daily run `38510416865` discovered 13, skipped 12 and
+uploaded 1; this is NOT evidence of completed library-wide coverage.
+Several thousand historical photos are still expected.
+
+New independent backfill was implemented on main:
+- `src/gphotos_backfill.py` — persistent Chrome gallery-viewer traversal,
+  native Shift+D browser download events, EXIF/filename date fallback,
+  per-media retry, SHA-256 collision avoidance, Koofr size verification.
+- `.github/workflows/backfill.yml` — 04:45 ICT daily, 100 attempted
+  downloads per default run, 4-hour GitHub cap and 200-minute engine budget.
+- `tests/test_gphotos_backfill.py` — offline helper/navigation tests, run
+  by backfill workflow before loading authentication.
+- `docs/BACKFILL.md` — operations and caveats.
+
+Backfill uses existing `manifest.sqlite` and a separate
+`backfill-checkpoint.json` in Koofr. The checkpoint is written AFTER
+the manifest; the script never deletes backups or changes the Daily cursor.
+All three scheduled workflows share concurrency key
+`google-photos-koofr-state`.
+
+**Validation warning:** This implementation has not yet been exercised
+against the authenticated account after deployment. In particular, verify
+that Google Photos viewer ArrowRight advances toward older media. If
+navigation stops, the status is `NAVIGATION_STALLED` (failure), NOT
+completed. Start with 100 before trying manual max_items=300.
+The status `bootstrap_complete` in Daily is not a full-inventory proof.
+The Vercel homepage currently displays Daily results, not historical backfill
+cumulative statistics.
 
 ## 2. Current production status
 

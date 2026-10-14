@@ -54,6 +54,43 @@ class BackfillTests(unittest.TestCase):
         downloader = Backfill.__new__(Backfill)
         self.assertIsNone(downloader.older(Page(), "A"))
 
+    def test_crashed_browser_restarts_and_preserves_cursor(self):
+        from unittest.mock import Mock
+        browser_one = SimpleNamespace(pages=[object()], close=Mock())
+        browser_two = SimpleNamespace(pages=[object()], close=Mock())
+        launch = Mock(side_effect=[browser_one, browser_two])
+        class FakePlaywright:
+            chromium = SimpleNamespace(launch_persistent_context=launch)
+        class Manager:
+            def __enter__(self):
+                return FakePlaywright()
+            def __exit__(self, *_):
+                pass
+        class DB:
+            class Cursor:
+                def execute(self, *_):
+                    return SimpleNamespace(fetchone=lambda: (3,))
+            c = Cursor()
+
+        test = Backfill.__new__(Backfill)
+        test.engine = SimpleNamespace(left=lambda: 1000, db=DB())
+        test.args = SimpleNamespace(profile="/unused", chrome="/unused", maxitems=10)
+        test.stats = {"attempted": 0, "uploaded": 0, "errors": 0}
+        test.cursor = {"last_id": "A"}
+        test._crawl = Mock(side_effect=[
+            Exception("Target page, context or browser has been closed"),
+            "PAUSED_LIMIT",
+        ])
+        test.persist = Mock()
+        with patch("src.gphotos_backfill.sync_playwright", return_value=Manager()):
+            result = test.run()
+        self.assertEqual(result["status"], "PAUSED_LIMIT")
+        self.assertEqual(launch.call_count, 2)
+        self.assertEqual(test.persist.call_args_list[0].args[0], "BROWSER_RESTART")
+        self.assertEqual(test.persist.call_args_list[-1].args[0], "PAUSED_LIMIT")
+        browser_one.close.assert_called_once()
+        browser_two.close.assert_called_once()
+
     def test_download_saves_browser_file_without_http_replay(self):
         with tempfile.TemporaryDirectory() as folder:
             class Download:

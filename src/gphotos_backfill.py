@@ -147,8 +147,22 @@ class Backfill:
             date = capture or capture_date(local, filename, label)
             remote, reused = e.remote(date, filename, media_id, digest, size)
             if not reused:
-                cmd("rclone", "copyto", str(local), remote,
-                    "--ignore-times", "--retries", "3")
+                # Keep already-backed-up bytes immutable even after an interrupted
+                # run: remote() may propose an existing media-ID collision path.
+                existing = cmd("rclone", "lsl", remote, ok=False, cap=True)
+                if existing.returncode == 0 and existing.stdout.strip():
+                    prior = e.wd / f"{media_id}__preexisting-koofr"
+                    try:
+                        cmd("rclone", "copyto", remote, str(prior))
+                        if sha(prior) == digest:
+                            reused = True
+                        else:
+                            raise RuntimeError("Refusing to overwrite different Koofr content")
+                    finally:
+                        prior.unlink(missing_ok=True)
+                if not reused:
+                    cmd("rclone", "copyto", str(local), remote,
+                        "--ignore-times", "--retries", "3")
             listing = cmd("rclone", "lsl", remote, cap=True).stdout.strip()
             remote_size = int(listing.split()[0]) if listing else -1
             if remote_size != size:
@@ -268,7 +282,9 @@ def main():
     try:
         result = backfill.run()
         print("BACKFILL_SUMMARY=" + json.dumps(result, ensure_ascii=False), flush=True)
-        return 0 if result["status"] in ("PAUSED_LIMIT", "PAUSED_TIME") else 2
+        good_pause = result["status"] in ("PAUSED_LIMIT", "PAUSED_TIME")
+        all_failed = result["attempted"] > 0 and result["uploaded"] == 0 and result["errors"] > 0
+        return 0 if good_pause and not all_failed else 2
     finally:
         try:
             backfill.engine.db.c.close()

@@ -109,7 +109,7 @@ jobs:
           candidates = [x.split('BACKFILL_SUMMARY=', 1)[1] for x in lines if 'BACKFILL_SUMMARY=' in x]
           if candidates:
               d = json.loads(candidates[-1])
-              keys = ('status','scan_status','scan_rounds','unique_visible','discovered','attempted','uploaded','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
+              keys = ('status','scan_status','scan_rounds','scan_seconds','download_seconds','unique_visible','discovered','attempted','uploaded','uploaded_per_hour','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
               report = ['## Google Photos Historical Backfill','', '| Metric | Value |','|---|---|']
               report += [f'| {k} | {d.get(k, "N/A")} |' for k in keys]
           else:

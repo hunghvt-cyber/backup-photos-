@@ -25,7 +25,8 @@ navigation separately and writes to the same durable SQLite manifest on Koofr.
 ## How it works
 
 1. Restore the authenticated Chrome profile and the manifest from Koofr.
-2. Retry at most three known error media from the manifest.
+2. Prioritize historical traversal. Known error media stay in the manifest for
+   separate retry instead of crashing the historical discovery session.
 3. If `backfill-checkpoint.json` exists, reopen the last visited photo and
    advance once to the older item. Otherwise start at the gallery's first item.
 4. Navigate photo-by-photo in **one** persistent Chrome context. Send
@@ -35,7 +36,8 @@ navigation separately and writes to the same durable SQLite manifest on Koofr.
    non-destructively with a media-ID suffix on collision. Upload using rclone
    and check Koofr file size after upload.
 6. Save a durable SQLite manifest first, then backfill cursor, every ten
-   viewed items and at the end. Failed media remain `status='error'` for retry.
+   viewed items, before restarting a crashed browser, and at the end.
+   Failed media remain `status='error'` for retry.
 7. Report summary and cumulative manifest count in GitHub Actions Summary.
 
 Backfill does **not** advance the Daily newest-item cursor, delete Photos or
@@ -53,6 +55,12 @@ Koofr files, or blindly mark the entire historical library complete.
   persistent Chrome profile.
 
 ## Limitations / release safety
+
+First manual trial `38523118388` on 2026-10-14 failed before historical
+traversal: the preflight retry of a previously broken media item closed Chrome.
+The engine has since been changed to **prioritize history**, reopen Chrome up to
+three times after unexpected closure, and preserve state between attempts.
+These changes still require a second live run for validation.
 
 This is a new downloader path and must be validated on real authenticated
 Google Photos pages. Unit tests cannot prove UI navigation works.

@@ -95,7 +95,7 @@ class Engine:
     finally:check.unlink(missing_ok=True)
    s,x=os.path.splitext(Path(nm).name);base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
   return base,False
- def one(self,pw,i,t,u,l,cr):
+ def one(self,pw,i,t,u,l,cr,update_checkpoint=True):
   self.db.touch(i,t,u,l,cr)
   if self.db.uploaded(i):self.stats['skipped']+=1;return
   self.stats['attempted']+=1;f=None
@@ -114,7 +114,9 @@ class Engine:
    if not exists:cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')
    line=cmd('rclone','lsl',r,cap=True).stdout.strip();rz=int(line.split()[0]) if line else -1
    if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
-   self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1;self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()});self.flush();print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)
+   self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1
+   if update_checkpoint:self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()})
+   self.flush();print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)
   except Exception as e:self.stats['errors']+=1;self.db.err(i,e);self.flush();print(f'UPLOAD_ERROR id={i} error={e}',file=sys.stderr,flush=True)
   finally:
    if f:f.unlink(missing_ok=True)

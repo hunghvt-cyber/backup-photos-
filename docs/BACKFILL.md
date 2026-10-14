@@ -41,13 +41,50 @@ Changes committed after the run:
 `GRID_QUEUE`, and `BACKFILL_SUMMARY`. Only raise to 100 when
 scanner-visible historical IDs grow past the first few dozen.
 
+## Free-tier daily operating policy (2026-10-14)
+
+The goal is reliable incremental progress with **no need to keep Codespaces
+running**. The historical backfill uses the already scheduled GitHub Actions
+runner. Codespaces is reserved for development/debugging because it does not
+provide unattended daily execution by itself.
+
+- Automatic trigger: **04:45 Asia/Ho_Chi_Minh daily**.
+- Hard job cap: **35 minutes** (previously 240 minutes).
+- Backup engine budget: **1,200 seconds = 20 minutes** (previously 3h20).
+- Gallery scan budget: **180 seconds = 3 minutes**. Stop early on 15 rounds
+  without discovering a new media ID.
+- Batch default: at most **100 attempted media**, constrained by the time
+  budget. This is a **limit, not a speed or success guarantee**.
+- The engine leaves time to persist the encrypted Chrome profile and to
+  clean temporary files before the GitHub job time limit.
+- GitHub Actions Summary includes `scan_seconds`, `download_seconds`,
+  `uploaded_per_hour`, and `manifest_uploaded_total`. A stalled scan or
+  zero-progress budget run is marked failed, rather than green.
+- Keep existing Koofr SQLite manifest, daily checkpoint and backups intact;
+  Backfill remains non-destructive, one-way only.
+
+**Free usage caveat:** GitHub Free includes 2,000 Actions minutes per billing
+cycle across applicable private-repository jobs owned by the account, not
+2,000 minutes separately for this repository. A 35-minute cap × 31 daily
+runs is at most 1,085 backfill job minutes per long month, **before** Daily,
+Drive backup, Reconcile, and all other repos. We cannot verify the account's
+remaining free quota from the backup workflow, so the run cap alone is NOT
+a guaranteed no-charge safeguard. Review
+https://github.com/settings/billing and activate included-usage warnings at
+90% and 100%; confirm billing/spending settings separately.
+
+**Reliability caveat:** Changing time limits does not fix Google Photos UI
+scrolling. The latest grid-scroll strategy is not yet validated by a new run;
+its success is measured by discovered unique media IDs and real upload
+throughput, not by the job showing a green checkmark.
+
 ## Scheduled operation
 
 - Daily new-photo backup: 03:17 Vietnam time, unchanged.
 - Historical Backfill: **04:45 Vietnam time** every day, manually dispatchable.
 - Manual trial: Actions > Google Photos Historical Backfill > Run workflow > branch `main` > `max_items=10`.
 - Default historical batch size: **100 attempted downloads**. Increase to 300 only after repeated verified success.
-- Runner timeout: 240 minutes; engine budget 200 minutes.
+- Runner timeout: **35 minutes**; engine budget **20 minutes**; scan cap **3 minutes**.
 - Concurrency group: `google-photos-koofr-state`; no overlap with Daily or quarterly Reconcile.
 
 ## Two-phase design

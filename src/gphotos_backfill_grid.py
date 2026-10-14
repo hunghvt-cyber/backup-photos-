@@ -341,9 +341,12 @@ def main():
                       and summary["errors"] > 0)
         scan_failed = summary["scan_status"] in (
             "SCAN_ERROR", "SCROLL_STALLED", "MAX_SCAN_ROUNDS")
+        no_progress = (summary["uploaded"] == 0 and summary["attempted"] == 0
+                       and summary["scan_status"] in (
+                           "SCAN_BUDGET", "TIME_BUDGET_LOW"))
         # Some uploads may succeed even if the scanner stalls. Still report
         # a failing run: the user's historical library is NOT fully covered.
-        return 2 if all_failed or scan_failed else 0
+        return 2 if all_failed or scan_failed or no_progress else 0
     finally:
         try:
             job.engine.db.c.close()

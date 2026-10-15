@@ -20,12 +20,14 @@ concurrency:
 jobs:
   daily:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    # 9 minutes total, including the encrypted Chrome profile save and reports.
+    timeout-minutes: 9
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "16800"
+      # Engine stops well before the job hard limit to preserve durable Koofr state.
+      MAX_RUNTIME_SECONDS: "300"
       MAX_ITEMS: ${{ inputs.max_items || '1000' }}
     steps:
       - uses: actions/checkout@v4

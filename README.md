@@ -42,11 +42,27 @@ POC media was removed after validation. Production media is stored separately un
 
 Runs at 03:17 Vietnam time and can be started manually. During initial bootstrap it walks newest → oldest across repeated bounded runs. Once bootstrap is complete, later runs stop at the prior newest checkpoint.
 
+**Historical Backfill** — `.github/workflows/backfill.yml`
+
+Automatically runs at **04:45 Vietnam time on Monday, Wednesday,
+Friday and Sunday**. It scans the existing Google Photos cloud library,
+then downloads historical photos/videos through the existing verified
+Daily downloader and uploads to Koofr. The 20-minute job cap includes a
+shorter Python/runtime watchdog so it has time to save the encrypted
+Chrome profile and log files. This is separate from Photos Daily; new
+media still gets daily backup. See [Backfill operations](docs/BACKFILL.md).
+
 **Quarterly reconcile** — `.github/workflows/reconcile.yml`
 
 Runs at **19:41 UTC on day 1** of January, April, July and October, which is **02:41 Vietnam time on day 2**. The simple UTC schedule is intentional for maintainability. It inventories Google Photos into a reconcile generation and writes a report. V1 never deletes.
 
-Both workflows use the same concurrency group so they cannot mutate persistent state simultaneously.
+All three Photos workflows share a concurrency group so they cannot mutate Koofr's persistent manifest and encrypted Chrome profile simultaneously.
+
+**Shared free GitHub Actions time budget** — see
+[docs/FREE_TIER_BUDGET.md](docs/FREE_TIER_BUDGET.md) for the
+Drive/Photos/quarterly schedule, guarded runtimes, worst-case
+1,784 minutes/31-day-month projection (assuming GitHub Free),
+manual Drive extended resync and billing caveats.
 
 ## Required GitHub Secrets
 

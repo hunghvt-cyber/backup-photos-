@@ -285,8 +285,13 @@ class GridBackfill:
                           flush=True)
                     # Reuse the downloader already proven by Daily backup,
                     # including its independent Chrome session and HTTP replay.
+                    # The per-media SQLite commit remains local. Upload the
+                    # durable snapshot to Koofr once per ten attempted media,
+                    # cutting two WebDAV round trips from every download.
+                    # If the runner crashes, recent files remain on Koofr and
+                    # the next run re-verifies them using SHA-256.
                     e.one(playwright, media_id, media_type, url, label, capture,
-                          update_checkpoint=False)
+                          update_checkpoint=False, flush_state=False)
                     if index % 10 == 0:
                         self.persist("UPLOADING")
                 self.download_seconds = round(time.monotonic() - download_started, 2)

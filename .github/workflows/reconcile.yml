@@ -64,7 +64,13 @@ jobs:
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
           rm -f /tmp/profile.enc /tmp/profile.tgz
       - name: Report-only full inventory
-        run: python3 -m src.gphotos_sync reconcile
+        shell: bash
+        run: |
+          set -o pipefail
+          # 45 minute watchdog inside the 60 minute job limit.
+          # Leave >=14 minutes for encrypted browser profile and cleanup.
+          timeout --signal=INT --kill-after=30s 2700s \
+            python3 -m src.gphotos_sync reconcile 2>&1 | tee "$RUNNER_TEMP/gphotos-reconcile.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash

@@ -126,6 +126,11 @@ jobs:
               keys = ('status','scan_status','scan_rounds','scan_seconds','download_seconds','unique_visible','discovered','attempted','uploaded','uploaded_per_hour','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
               report = ['## Google Photos Historical Backfill','', '| Metric | Value |','|---|---|']
               report += [f'| {k} | {d.get(k, "N/A")} |' for k in keys]
+              if d.get('errors', 0):
+                  report += ['', f"**Partial backup:** {d['errors']} media download(s) failed in this run. Errors remain in the manifest for later repair."]
+                  print(f"::warning::Historical Backfill had {d['errors']} download errors; {d.get('uploaded', 0)} uploads succeeded.")
+              if d.get('status') not in ('PAUSED_LIMIT', 'PAUSED_TIME'):
+                  report += ['', '**Note:** Historical library coverage is not complete; inspect scan status before increasing quotas.']
           else:
               report = ['## Google Photos Historical Backfill','','No final summary; inspect the job logs for an unexpected crash.']
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:

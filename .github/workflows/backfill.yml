@@ -23,13 +23,14 @@ concurrency:
 jobs:
   backfill:
     runs-on: ubuntu-24.04
-    # 20 min total: max 10 min engine, at least 10 min tail for profile/state/report.
+    # 20 min total: 12 min engine budget with 5 min internal stop reserve,
+    # external 11 min watchdog; the last 8-9 min protect profile/log saving.
     timeout-minutes: 20
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "600"
+      MAX_RUNTIME_SECONDS: "720"
       MAX_SCAN_SECONDS: "180"
       MAX_ITEMS: ${{ inputs.max_items || '100' }}
     steps:
@@ -80,7 +81,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 -m src.gphotos_backfill_grid 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          # Stop a stuck download BEFORE GitHub kills the entire runner.
+          # Even on failure, the next always() steps save the Chrome profile
+          # and publish a diagnostic report.
+          timeout --signal=INT --kill-after=30s 660s \
+            python3 -m src.gphotos_backfill_grid 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash

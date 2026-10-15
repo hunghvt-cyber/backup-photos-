@@ -2,7 +2,7 @@
 
 > Read this file first when continuing development with another AI or in a new conversation.
 > Repository: `hunghvt-cyber/google-photos-koofr`
-> Last updated: 2026-10-14
+> Last updated: 2026-10-15
 > Production status: operational
 
 ## 1. Goal
@@ -12,6 +12,46 @@ Build and maintain an unattended, one-way Google Photos → Koofr backup system 
 Google Photos is always the source of truth. Koofr is the backup destination and durable state store.
 
 Normal operation must not require a PC, Codespaces, or an always-on server.
+
+## 2026-10-15 verified Backfill breakthrough and speed improvement
+
+Run 38658212741 on 2026-10-15 (ICT):
+https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38658212741
+**Success/PAUSED_TIME, partial media errors:** discovered=276 in 21.7s,
+attempted=50, uploaded=44, errors=6, runtime download_seconds=888.44,
+uploaded_per_hour=178.29, cumulative manifest uploaded=161,
+pending_seen=102, pending_errors=13. Gallery scrolling is now working
+to at least 276 distinct IDs, so the primary bottleneck is per-media
+download and Koofr state flush, not enumeration.
+The max_items=100 setting is an attempt ceiling, not guaranteed throughput.
+
+Speed changes committed after the run:
+- `Engine.one` now accepts optional `flush_state=True` (default).
+  Daily is unchanged and still persists state immediately.
+- Grid Backfill calls `Engine.one(..., update_checkpoint=False,
+  flush_state=False)` and persists state via `GridBackfill.persist`
+  once each 10 attempted media and at the end. Avoids redundant
+  manifest+daily-checkpoint WebDAV uploads per individual image.
+- A mid-batch crash may lose recent manifest checkpoint entries, but
+  uploaded remote files remain; next run verifies size and SHA before
+  reusing, so no remote media are destroyed.
+- Browser download request replay now excludes cached conditional HTTP
+  headers, mitigating `HTTP 304 Not Modified`.
+- Both Daily and Backfill workflows exclude disposable Chrome caches from
+  the encrypted refreshed profile archive; authentication databases
+  and web storage are preserved. Logs include `PROFILE_ARCHIVE_BYTES`
+  and `PROFILE_PERSIST_SECONDS`.
+- Backfill Actions Summary now explicitly reports partial failures.
+
+**Not yet tested with a live workflow after these performance changes.**
+Offline tests for batch persistence were added to
+`tests/test_gphotos_backfill_grid.py`, and will run in the next workflow.
+Do not claim 100 uploads/day until next run proves it.
+Time budgets remain Backfill 35-minute job / 20-minute engine /
+3-minute scanner. Daily remains at 03:17 ICT and Backfill 04:45 ICT.
+Drive-Koofr bisync also runs daily and may consume shared GitHub
+Actions free minutes; latest checked run 38520318431 lasted ~28 min.
+See `docs/BACKFILL.md` for details.
 
 ## 2026-10-14 budget-constrained unattended daily backfill
 

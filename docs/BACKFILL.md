@@ -41,6 +41,56 @@ Changes committed after the run:
 `GRID_QUEUE`, and `BACKFILL_SUMMARY`. Only raise to 100 when
 scanner-visible historical IDs grow past the first few dozen.
 
+## 2026-10-15 — historical scanning works; optimize write amplification
+
+Latest verified run: https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/38658212741
+
+- `GRID_SCAN` found **276 distinct media IDs in 21.7 seconds**, with a
+  real Google Photos scrollable `C-WIZ` container. The gallery-scanning
+  bottleneck is now resolved for at least the first 276 items.
+- `max_items=100`, but engine hit its 1,200-second time budget after
+  **50 attempted downloads**; **44 verified uploads**, **6 failures**.
+- Runtime reported **178.29 successful media/hour of download phase**,
+  `manifest_uploaded_total=161`, `pending_seen=102`, `pending_errors=13`.
+- Errors were mainly transient or persistent HTTP 403 and Chrome closure.
+  The failed media are retained in the manifest, not deleted.
+- GitHub run was successful because progress was nonzero and the engine
+  paused intentionally. This is **not** evidence that all history is backed up.
+
+Performance improvements committed *after* that run, not yet live benchmarked:
+
+1. `Engine.one(..., flush_state=False)` lets only the historical Backfill
+   defer remote SQLite/checkpoint uploads. `GridBackfill.run` uses this
+   mode and invokes `persist("UPLOADING")` once per **10 attempted media**,
+   then once at the end. This avoids two Koofr uploads for every media
+   file. The SQLite manifest still commits each local success/failure.
+   **The existing Daily flow keeps its immediate flush behavior.**
+2. If a runner ends mid-batch, remote photo files already copied to Koofr
+   are retained; the next run rechecks size/SHA before attempting a
+   duplicate upload. At worst the recent unflushed media may be
+   re-downloaded, but they are not deleted.
+3. Strip conditional `If-None-Match`, `If-Modified-Since`, `If-Range`
+   and `Range` request headers during authenticated download replay.
+   This addresses HTTP **304 Not Modified** and partial-cache surprises.
+   It does **not** guarantee that Google stops returning 403.
+4. Exclude disposable Chrome caches (`Cache`, `Code Cache`, `GPUCache`,
+   `DawnCache`, shader caches and `Crashpad`) from the encrypted
+   profile archive uploaded after Daily and Backfill. Authentication
+   cookies and persistent browser storage are preserved. The workflows
+   now log `PROFILE_ARCHIVE_BYTES` and `PROFILE_PERSIST_SECONDS`
+   so reduction can be measured.
+
+The next run should validate (a) that the new code's offline tests pass,
+(b) download throughput exceeds 178/hour, (c) profile archive is smaller
+and session survives reboot, and (d) the historical media count increases.
+**100 successful uploads/run is still a target, not a verified result.**
+
+**Quota warning:** Other repositories consume the same GitHub-hosted
+Actions quota. A Google Drive↔Koofr run 38520318431 lasted about 28
+minutes; daily historical Backfill can use up to 35 minutes. Actual
+monthly included-use headroom depends on all scheduled jobs, so
+confirm GitHub billing usage before increasing any runtime limits.
+
 ## Free-tier daily operating policy (2026-10-14)
 
 The goal is reliable incremental progress with **no need to keep Codespaces

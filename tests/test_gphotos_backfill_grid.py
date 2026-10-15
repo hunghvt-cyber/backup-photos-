@@ -58,8 +58,9 @@ class GridBackfillTests(unittest.TestCase):
         engine = Engine()
         # The runtime keyword is a safety requirement, not an optional optimization.
         engine.one(object(), "ID", "photo", "url", None, None,
-                   update_checkpoint=False)
+                   update_checkpoint=False, flush_state=False)
         self.assertEqual(engine.calls[0][1]["update_checkpoint"], False)
+        self.assertEqual(engine.calls[0][1]["flush_state"], False)
 
     def test_virtualized_gallery_scans_past_known_uploaded_photos(self):
         from unittest.mock import patch
@@ -126,6 +127,59 @@ class GridBackfillTests(unittest.TestCase):
         self.assertEqual(job.scan_status, "SCROLL_STALLED")
         self.assertEqual(job.scan_rounds, 42)
         self.assertEqual(browser.close.call_count, 1)
+
+
+    def test_engine_batch_flush_does_not_write_checkpoint_per_media(self):
+        from src.gphotos_sync import Engine
+        from unittest.mock import patch
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp:
+            filepath = Path(temp) / "picture.jpg"
+            filepath.write_bytes(b"JPEG")
+            fake = Engine.__new__(Engine)
+            fake.db = SimpleNamespace(
+                touch=Mock(), uploaded=Mock(return_value=False),
+                done=Mock(), err=Mock())
+            fake.stats = dict(attempted=0, uploaded=0, errors=0, skipped=0)
+            fake.cp = {"newest_id": "DAILY_MEDIA"}
+            fake.download = Mock(return_value=(filepath, "picture.jpg"))
+            fake.remote = Mock(return_value=("koofr_remote:/Photos/picture.jpg", False))
+            fake.flush = Mock()
+            fake.left = Mock(return_value=2000)
+
+            def cmd_fake(*args, **kwargs):
+                if args[:2] == ("rclone", "lsl"):
+                    return SimpleNamespace(stdout="4 2026-10-15 00:00:00 picture.jpg")
+                return SimpleNamespace(stdout="", returncode=0)
+
+            with patch("src.gphotos_sync.cmd", side_effect=cmd_fake), \
+                 patch("src.gphotos_sync.sha", return_value="deadbeef"):
+                fake.one(None, "MEDIA1", "photo",
+                         "https://photos.google.com/photo/MEDIA1",
+                         None, None, update_checkpoint=False, flush_state=False)
+            self.assertEqual(fake.stats["uploaded"], 1)
+            self.assertEqual(fake.stats["errors"], 0)
+            self.assertEqual(fake.cp["newest_id"], "DAILY_MEDIA")
+            fake.db.done.assert_called_once()
+            fake.flush.assert_not_called()
+
+    def test_engine_batch_flush_preserves_error_in_manifest(self):
+        from src.gphotos_sync import Engine
+        fake = Engine.__new__(Engine)
+        fake.db = SimpleNamespace(
+            touch=Mock(), uploaded=Mock(return_value=False),
+            done=Mock(), err=Mock())
+        fake.stats = dict(attempted=0, uploaded=0, errors=0, skipped=0)
+        fake.cp = {"newest_id": "DAILY_MEDIA"}
+        fake.download = Mock(side_effect=RuntimeError("unexpected test download error"))
+        fake.flush = Mock()
+        fake.one(None, "MEDIA1", "photo",
+                 "https://photos.google.com/photo/MEDIA1",
+                 None, None, update_checkpoint=False, flush_state=False)
+        fake.db.err.assert_called_once()
+        fake.flush.assert_not_called()
+        self.assertEqual(fake.stats["errors"], 1)
 
 
 if __name__ == "__main__":

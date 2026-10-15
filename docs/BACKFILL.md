@@ -87,7 +87,7 @@ and session survives reboot, and (d) the historical media count increases.
 
 **Quota warning:** Other repositories consume the same GitHub-hosted
 Actions quota. A Google Drive↔Koofr run 38520318431 lasted about 28
-minutes; daily historical Backfill can use up to 35 minutes. Actual
+minutes; historical Backfill now runs Mon/Wed/Fri/Sun with a 20-minute job cap. Actual
 monthly included-use headroom depends on all scheduled jobs, so
 confirm GitHub billing usage before increasing any runtime limits.
 
@@ -98,9 +98,9 @@ running**. The historical backfill uses the already scheduled GitHub Actions
 runner. Codespaces is reserved for development/debugging because it does not
 provide unattended daily execution by itself.
 
-- Automatic trigger: **04:45 Asia/Ho_Chi_Minh daily**.
-- Hard job cap: **35 minutes** (previously 240 minutes).
-- Backup engine budget: **1,200 seconds = 20 minutes** (previously 3h20).
+- Automatic trigger: **04:45 Asia/Ho_Chi_Minh Mon/Wed/Fri/Sun**. Photos Daily still runs daily.
+- Hard job cap: **20 minutes**; external runner watchdog **11 minutes**; profile/log tail reserved.
+- Backup engine budget: **720 seconds = 12 minutes**, with an internal stop reserve before the worker deadline.
 - Gallery scan budget: **180 seconds = 3 minutes**. Stop early on 15 rounds
   without discovering a new media ID.
 - Batch default: at most **100 attempted media**, constrained by the time
@@ -115,26 +115,32 @@ provide unattended daily execution by itself.
 
 **Free usage caveat:** GitHub Free includes 2,000 Actions minutes per billing
 cycle across applicable private-repository jobs owned by the account, not
-2,000 minutes separately for this repository. A 35-minute cap × 31 daily
-runs is at most 1,085 backfill job minutes per long month, **before** Daily,
-Drive backup, Reconcile, and all other repos. We cannot verify the account's
+2,000 minutes separately for this repository. A 20-minute cap × at most 18 scheduled days uses **360 Backfill minutes**
+in a 31-day month. The entire scheduled plan, including a quarterly
+Reconcile, has an estimated worst-case ceiling of **1,784 minutes** per
+31-day month, before other private repositories and manual reruns. We cannot verify the account's
 remaining free quota from the backup workflow, so the run cap alone is NOT
 a guaranteed no-charge safeguard. Review
 https://github.com/settings/billing and activate included-usage warnings at
 90% and 100%; confirm billing/spending settings separately.
 
 **Reliability caveat:** Changing time limits does not fix Google Photos UI
-scrolling. The latest grid-scroll strategy is not yet validated by a new run;
+scrolling. Grid scrolling was verified by run 38658212741 (276 distinct media in 21.7s);
 its success is measured by discovered unique media IDs and real upload
 throughput, not by the job showing a green checkmark.
+
+Shared accounting for Drive, Daily, Backfill and quarterly Reconcile is in
+[FREE_TIER_BUDGET.md](FREE_TIER_BUDGET.md). These new operating limits still
+require validation on the next scheduled runs; they are not proof of zero
+charges or full library coverage.
 
 ## Scheduled operation
 
 - Daily new-photo backup: 03:17 Vietnam time, unchanged.
-- Historical Backfill: **04:45 Vietnam time** every day, manually dispatchable.
+- Historical Backfill: **04:45 Vietnam time on Monday, Wednesday, Friday, Sunday**, manually dispatchable on other days.
 - Manual trial: Actions > Google Photos Historical Backfill > Run workflow > branch `main` > `max_items=10`.
 - Default historical batch size: **100 attempted downloads**. Increase to 300 only after repeated verified success.
-- Runner timeout: **35 minutes**; engine budget **20 minutes**; scan cap **3 minutes**.
+- Runner timeout: **20 minutes**; engine budget **12 minutes** with 11-minute watchdog; scan cap **3 minutes**.
 - Concurrency group: `google-photos-koofr-state`; no overlap with Daily or quarterly Reconcile.
 
 ## Two-phase design

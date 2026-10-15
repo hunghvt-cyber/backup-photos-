@@ -8,7 +8,10 @@ on:
         required: false
         default: "100"
   schedule:
-    - cron: "45 21 * * *"
+    # UTC Sun/Tue/Thu/Sat 21:45 = Vietnam Mon/Wed/Fri/Sun 04:45.
+    # Daily photos still run every day; fewer but longer backfill sessions
+    # minimize Chrome profile setup/persist overhead per historical image.
+    - cron: "45 21 * * 0,2,4,6"
 
 permissions:
   contents: read
@@ -20,12 +23,13 @@ concurrency:
 jobs:
   backfill:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # 20 min total: max 10 min engine, at least 10 min tail for profile/state/report.
+    timeout-minutes: 20
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "1200"
+      MAX_RUNTIME_SECONDS: "600"
       MAX_SCAN_SECONDS: "180"
       MAX_ITEMS: ${{ inputs.max_items || '100' }}
     steps:

@@ -78,7 +78,7 @@ class Engine:
    p.goto(u,wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(1500)
    with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
     with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
-   r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
+   r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length','if-none-match','if-modified-since','if-range','range')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
    with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
    if dst.stat().st_size<1:raise RuntimeError('empty download')
    return dst,nm
@@ -99,7 +99,7 @@ class Engine:
     finally:check.unlink(missing_ok=True)
    s,x=os.path.splitext(Path(nm).name);base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
   return base,False
- def one(self,pw,i,t,u,l,cr,update_checkpoint=True):
+ def one(self,pw,i,t,u,l,cr,update_checkpoint=True,flush_state=True):
   self.db.touch(i,t,u,l,cr)
   if self.db.uploaded(i):self.stats['skipped']+=1;return
   self.stats['attempted']+=1;f=None
@@ -120,8 +120,12 @@ class Engine:
    if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
    self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1
    if update_checkpoint:self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()})
-   self.flush();print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)
-  except Exception as e:self.stats['errors']+=1;self.db.err(i,e);self.flush();print(f'UPLOAD_ERROR id={i} error={e}',file=sys.stderr,flush=True)
+   if flush_state:self.flush()
+   print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)
+  except Exception as e:
+   self.stats['errors']+=1;self.db.err(i,e)
+   if flush_state:self.flush()
+   print(f'UPLOAD_ERROR id={i} error={e}',file=sys.stderr,flush=True)
   finally:
    if f:f.unlink(missing_ok=True)
  def scan(self,pw):

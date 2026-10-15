@@ -87,9 +87,23 @@ jobs:
             exit 0
           fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
-          tar -C "$HOME" -czf /tmp/profile-refresh.tgz gphotos-profile
+          # Browser caches are disposable, but auth cookies/storage are not.
+          # Excluding caches reduces the encrypted profile uploaded to Koofr
+          # after every run without changing its authentication state.
+          PROFILE_SAVE_STARTED="$(date +%s)"
+          tar -C "$HOME" \
+            --exclude='*/Cache' \
+            --exclude='*/Code Cache' \
+            --exclude='*/GPUCache' \
+            --exclude='*/DawnCache' \
+            --exclude='*/ShaderCache' \
+            --exclude='*/GrShaderCache' \
+            --exclude='*/Crashpad' \
+            -czf /tmp/profile-refresh.tgz gphotos-profile
+          echo "PROFILE_ARCHIVE_BYTES=$(stat -c %s /tmp/profile-refresh.tgz)"
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in /tmp/profile-refresh.tgz -out /tmp/profile-refresh.enc -pass env:GPHOTOS_PROFILE_KEY
           rclone copyto /tmp/profile-refresh.enc 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' --ignore-times
+          echo "PROFILE_PERSIST_SECONDS=$(( $(date +%s) - PROFILE_SAVE_STARTED ))"
           rm -f /tmp/profile-refresh.tgz /tmp/profile-refresh.enc
       - name: Cleanup worker credentials
         if: always()

@@ -5,6 +5,58 @@
 > Last updated: 2026-10-15
 > Production status: operational
 
+## 2026-10-15 active free-tier scheduling and safe-shutdown policy
+
+**CURRENT SOURCE OF TRUTH:** [docs/FREE_TIER_BUDGET.md](docs/FREE_TIER_BUDGET.md).
+This section supersedes all older "Daily Backfill at 04:45" and
+"35-minute historical Backfill" statements in archived incident history.
+
+User directive: keep the two private repos inside GitHub Free's monthly
+minute allocation, prioritize completed checkpoints/logs over using the
+entire 6-hour job limit. Google Photos is the only media source; no
+Google Takeout, no mobile photo upload and no persistent Codespaces.
+
+Active automatic schedule (Asia/Ho_Chi_Minh):
+
+| Project/workflow | ICT schedule | Job hard cap | Internal process budget |
+|---|---|---:|---|
+| `my-backup-gdrive-koofr/.github/workflows/bisync.yml` | 02:00 EVERY day | 35 min | 29 min Rclone + max 2 min interrupt grace |
+| `google-photos-koofr/.github/workflows/daily.yml` | 03:17 EVERY day | 9 min | Python 300s and watchdog 240s (+30s kill grace) |
+| `google-photos-koofr/.github/workflows/backfill.yml` | 04:45 Mon/Wed/Fri/Sun | 20 min | Python 720s and watchdog 660s (+30s kill grace) |
+| `google-photos-koofr/.github/workflows/reconcile.yml` | 02:41 Jan/Apr/Jul/Oct 2nd | 60 min | Python 2400s and watchdog 2700s (+30s kill grace) |
+
+The early termination limits leave the runner time to persist Koofr
+manifest/checkpoints, rclone bisync state/caches, encrypted Chrome
+profile, GitHub artifact and reports. Shell timeout exits may mark a run
+failed; `if: always()` performs cleanup/persistence where possible.
+There is NO guarantee if GitHub kills the runner itself. Backfill remains
+manual-dispatchable any day; its automatic schedule is four days weekly
+for better per-minute effectiveness, while **new Photos Daily stays daily**.
+
+Worst-case planned monthly consumption for a 31-day month including
+a quarterly reconcile: 31×35 + 31×9 + 18×20 + 60 = **1,784 min**.
+This assumes GitHub Free private standard Linux runner allowance 2,000
+min/billing month. **216 min is only a planning buffer**, not actual
+remaining billing quota: other repositories, manual runs, reruns, and
+GitHub billing-cycle boundaries can consume it. User should check
+https://github.com/settings/billing and set a no-overage spending cap /
+appropriate budget alerts for a hard monetary guardrail.
+
+Manual rescue: Drive `workflow_dispatch` now offers
+`extended_budget=true`, restoring a 330-minute maximum job and
+300-minute rclone budget, **only** when deliberately selected manually.
+It can exceed remaining free minutes; `resync/reset` should not be used
+without checking state and quota first. Daily Drive default remains
+35 minutes and uses recovered cache on timeout; a timed-out resync is
+NOT a completed two-way sync.
+
+Time caps are deployed but need confirmation from the next scheduled
+Actions runs. Do not revert these for throughput without a
+free-minutes calculation and explicit user approval. Observed benchmarks:
+Drive Bisync 28.3min full job in run 38520318431; Photos Daily 3.6min
+in run 38510416865; historical Backfill 22.8min and 44 successful
+uploads in run 38658212741 (before new limits).
+
 ## 1. Goal
 
 Build and maintain an unattended, one-way Google Photos → Koofr backup system that can be operated from a phone/iPad through GitHub Actions.

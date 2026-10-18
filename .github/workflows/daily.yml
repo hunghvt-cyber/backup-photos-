@@ -164,17 +164,31 @@ jobs:
           path: ${{ runner.temp }}/daily-health.json
           if-no-files-found: warn
           retention-days: 90
-      - name: Publish Google Photos health to Vercel Blob
+      - name: Publish Google Photos health (selected report backend)
         if: always()
         continue-on-error: true
         shell: bash
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          REPORT_BACKEND: ${{ vars.REPORT_BACKEND || 'blob' }}
+          REPORT_GAS_URL: ${{ vars.REPORT_GAS_URL }}
+          REPORT_GAS_KEY: ${{ secrets.REPORT_GAS_KEY }}
         run: |
-          if [ -z "$BLOB_READ_WRITE_TOKEN" ]; then
-            echo "::notice::Set BLOB_READ_WRITE_TOKEN to publish Google Photos report."
-            exit 0
-          fi
           python3 scripts/backup-summary.py
-          python3 -m pip install --disable-pip-version-check 'vercel==0.11.6'
-          python3 scripts/publish_blob_report.py gphotos-backup-summary.json gphotos-backup-latest.json
+          case "$REPORT_BACKEND" in
+            gas-drive)
+              python3 scripts/publish_gas_report.py gphotos-backup-summary.json
+              ;;
+            blob)
+              if [ -z "$BLOB_READ_WRITE_TOKEN" ]; then
+                echo "::notice::BLOB_READ_WRITE_TOKEN missing; report publishing disabled."
+                exit 0
+              fi
+              python3 -m pip install --disable-pip-version-check 'vercel==0.11.6'
+              python3 scripts/publish_blob_report.py gphotos-backup-summary.json gphotos-backup-latest.json
+              ;;
+            *)
+              echo "::error::Unsupported report backend."
+              exit 1
+              ;;
+          esac

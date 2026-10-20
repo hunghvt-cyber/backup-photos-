@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       max_items:
-        description: "Maximum historical images/videos to attempt (up to 100, subject to time budget)"
+        description: "Maximum historical images/videos to attempt (subject to time budget)"
         required: false
-        default: "100"
+        default: "10000"
+  push:
+    branches: [upgrade/web-inventory-20261020]
   schedule:
-    # UTC Sun/Tue/Thu/Sat 21:45 = Vietnam Mon/Wed/Fri/Sun 04:45.
-    # Daily photos still run every day; fewer but longer backfill sessions
-    # minimize Chrome profile setup/persist overhead per historical image.
-    - cron: "45 21 * * 0,2,4,6"
+    # Every day 04:45 Vietnam. Serialized with Daily and Reconcile.
+    - cron: "45 21 * * *"
 
 permissions:
   contents: read
@@ -23,16 +23,15 @@ concurrency:
 jobs:
   backfill:
     runs-on: ubuntu-24.04
-    # 20 min total: 12 min engine budget with 5 min internal stop reserve,
-    # external 11 min watchdog; the last 8-9 min protect profile/log saving.
-    timeout-minutes: 20
+    # Public standard runner: 5h engine + shutdown/profile/report reserve.
+    timeout-minutes: 330
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "720"
+      MAX_RUNTIME_SECONDS: ${{ github.event_name == 'push' && '900' || '18000' }}
       MAX_SCAN_SECONDS: "180"
-      MAX_ITEMS: ${{ inputs.max_items || '100' }}
+      MAX_ITEMS: ${{ github.event_name == 'push' && '10' || inputs.max_items || '10000' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and configure runtime
@@ -84,8 +83,8 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s 660s \
-            python3 -m src.gphotos_backfill_grid 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          timeout --signal=INT --kill-after=30s 18300s \
+            python3 -m src.gphotos_web_backup --scan-seconds ${{ github.event_name == 'push' && '60' || '600' }} 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -129,10 +128,10 @@ jobs:
           import json, os, pathlib
           p = pathlib.Path(os.environ['RUNNER_TEMP']) / 'gphotos-backfill.log'
           lines = p.read_text(errors='replace').splitlines() if p.exists() else []
-          candidates = [x.split('BACKFILL_SUMMARY=', 1)[1] for x in lines if 'BACKFILL_SUMMARY=' in x]
+          candidates = [x.split('WEB_SUMMARY=', 1)[1] for x in lines if 'WEB_SUMMARY=' in x]
           if candidates:
               d = json.loads(candidates[-1])
-              keys = ('status','scan_status','scan_rounds','scan_seconds','download_seconds','unique_visible','discovered','attempted','uploaded','uploaded_per_hour','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
+              keys = ('inventory_complete','inventory_error','albums','album_memberships','status','scan_status','scan_rounds','scan_seconds','download_seconds','unique_visible','discovered','attempted','uploaded','uploaded_per_hour','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
               report = ['## Google Photos Historical Backfill','', '| Metric | Value |','|---|---|']
               report += [f'| {k} | {d.get(k, "N/A")} |' for k in keys]
               if d.get('errors', 0):

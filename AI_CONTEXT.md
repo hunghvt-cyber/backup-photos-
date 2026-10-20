@@ -22,8 +22,10 @@ Local validation: 29 tests pass. First live trials 39385139058 and 39385325939 f
 and verified 17 uploads in total; three media errors were retained. Latest
 manifest uploaded total was 239. Trial 39385724694 verified 49 albums, 1,631 album memberships and 12,104
 inventoried media, with manifest uploaded total 244. It uploaded 5/10 and
-retained original-URL failures. A fourth retry-only trial validates the
-read-only pLFTfd signed-original fallback.
+retained original-URL failures. Retry-only trial 39386517817 is running against retained failures using the
+read-only pLFTfd signed-original fallback. Production release is merged via PR #5.
+Full-budget run 39386977931 is queued after the trial; it resumes durable state.
+Only schedule/manual triggers remain after this one-time release kickoff.
 Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
 `inventory_complete` describes one finished traversal, not a verified full backup.
 One inaccessible source keeps its cursor and is deferred, allowing other sources

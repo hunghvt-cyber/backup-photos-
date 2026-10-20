@@ -7,8 +7,6 @@ on:
         description: "Maximum historical images/videos to attempt (subject to time budget)"
         required: false
         default: "10000"
-  push:
-    branches: [main]
   schedule:
     # Every day 04:45 Vietnam. Serialized with Daily and Reconcile.
     - cron: "45 21 * * *"

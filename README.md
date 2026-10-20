@@ -1,4 +1,4 @@
-> Current public-runner policy and web backup upgrade: see [AI_CONTEXT.md](AI_CONTEXT.md). Older budget and grid-scanner notes below are historical.
+> Current state: [20 October upgrade handoff](docs/UPGRADE-20261020.md) and [AI_CONTEXT.md](AI_CONTEXT.md).
 
 # Google Photos → Koofr
 
@@ -18,7 +18,7 @@ The foundation and production path have been proven on fresh GitHub-hosted runne
 - compute SHA-256, upload through rclone/WebDAV, and verify remote byte size;
 - persist SQLite manifest and JSON checkpoint back to Koofr.
 
-Initial historical bootstrap completed successfully on 2026-10-08. The bootstrap run discovered 21 media, uploaded 16 new items, skipped 5 already committed items, and finished with 0 errors and `bootstrap_complete=true`.
+The early 2026-10-08 bootstrap saw only 21 media; its `bootstrap_complete=true` was not evidence of full library coverage. The current worker inventories Photos, Archive and albums. The completed retry trial on 2026-10-20 uploaded 10/10 formerly failed items; its snapshot recorded 12,713 inventoried media, 254 uploaded in the manifest, and 49 albums. Full library coverage remains unverified.
 
 POC media was removed after validation. Production media is stored separately under `Google Photos/Photos/`.
 
@@ -46,13 +46,7 @@ Runs at 03:17 Vietnam time and can be started manually. During initial bootstrap
 
 **Historical Backfill** — `.github/workflows/backfill.yml`
 
-Automatically runs at **04:45 Vietnam time on Monday, Wednesday,
-Friday and Sunday**. It scans the existing Google Photos cloud library,
-then downloads historical photos/videos through the existing verified
-Daily downloader and uploads to Koofr. The 20-minute job cap includes a
-shorter Python/runtime watchdog so it has time to save the encrypted
-Chrome profile and log files. This is separate from Photos Daily; new
-media still gets daily backup. See [Backfill operations](docs/BACKFILL.md).
+Runs **every day at 04:45 Vietnam time**, with a five-hour engine budget, 305-minute external watchdog and 330-minute job cap. It uses `src/gphotos_web_backup.py` to paginate Photos, Archive and albums, resume durable cursors and upload pending originals to Koofr. Album membership is stored in the private SQLite manifest without duplicating media into album folders. See the [current handoff](docs/UPGRADE-20261020.md).
 
 **Quarterly reconcile** — `.github/workflows/reconcile.yml`
 
@@ -60,11 +54,7 @@ Runs at **19:41 UTC on day 1** of January, April, July and October, which is **0
 
 All three Photos workflows share a concurrency group so they cannot mutate Koofr's persistent manifest and encrypted Chrome profile simultaneously.
 
-**Shared free GitHub Actions time budget** — see
-[docs/FREE_TIER_BUDGET.md](docs/FREE_TIER_BUDGET.md) for the
-Drive/Photos/quarterly schedule, guarded runtimes, worst-case
-1,784 minutes/31-day-month projection (assuming GitHub Free),
-manual Drive extended resync and billing caveats.
+**Public runner policy:** Photos uses standard hosted Ubuntu runners in a public repository. The older shared private-repository minute-budget projection is historical. Six hours is a per-job hosted-runner limit; the shorter configured budgets preserve time for state and profile saving. This upgrade does not change Drive workflows.
 
 ## Required GitHub Secrets
 
@@ -85,11 +75,11 @@ The profile encryption key must match `.gphotos-sync/auth/profile.tar.gz.enc`.
 - Duplicate filenames never overwrite an existing Koofr object; a short media-ID suffix is used.
 - Durable state lives on Koofr, not GitHub Actions cache.
 - Browser profiles, cookies, passwords and rclone config are never committed.
-- Jobs stop before the 5-hour runner limit so state can be flushed.
+- Configured engine budgets and watchdogs stop before job hard limits so state can be flushed.
 
 ## State recovery
 
-The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. SQLite runs in WAL mode locally, so production creates a consistent snapshot with SQLite's Backup API before uploading the remote manifest. State is flushed after every successful upload and again during final cleanup. If a run is interrupted, already committed items are skipped on the next run.
+The runner is disposable. Each run restores `manifest.sqlite` and checkpoints from Koofr. SQLite runs in WAL mode locally, so production creates a consistent snapshot with SQLite's Backup API before uploading the remote manifest. Daily persists immediately. Web Backfill checkpoints each inventory page, each ten attempted media and at the end; a hard interruption may require rechecking a recent batch. If a run is interrupted, already committed items are skipped on the next run.
 
 If manifest state is missing but a candidate Koofr object already exists, production compares size and SHA-256 and can reconstruct the manifest instead of creating a duplicate.
 

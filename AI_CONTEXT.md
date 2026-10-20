@@ -1,50 +1,26 @@
-## 2026-10-20 public-runner upgrade — current policy
+## Trạng thái hiện hành — 20/10/2026
 
-Both Photos and Drive repositories were verified public. The old private-repository
-2,000-minute budget below is historical and no longer controls Photos schedules.
-Daily now has a 25-minute engine budget / 40-minute job cap. Historical Backfill
-runs daily at 04:45 ICT, with a 5-hour engine / 330-minute job cap.
+**Đọc [bàn giao nâng cấp 20/10/2026](docs/UPGRADE-20261020.md) trước.** Đây là nguồn hiện hành cho lịch public-runner, Photos/Archive/album, kết quả thử và việc cần kiểm tra tiếp. Các phần phía dưới lưu lịch sử, có thể có lịch và ngân sách đã hết hiệu lực.
 
-`src/gphotos_web_backup.py` replaces grid scrolling in Backfill with pinned gpwc
-read-only requests: Archive, library, album list, every album page. SQLite tables
-`web_tasks`, `web_items`, `web_albums`, `web_album_items` extend the existing
-manifest without resetting media or Daily checkpoints. Pagination and membership
-are saved to Koofr after each page. Album metadata stays private in manifest.sqlite;
-photos are stored once under Photos, not duplicated into album directories.
-
-Downloads require original URL and filename, compare expected size when available,
-then reuse existing SHA/Koofr verification. Missing originals are errors; no
-thumbnail substitution. There are no Google mutations/deletions. Failed items
-rotate behind unattempted items. The encrypted Chrome profile supplies temporary
-cookies; plaintext cookies are deleted and never committed or uploaded.
-
-Local validation: 29 tests pass. First live trials 39385139058 and 39385325939 found 9,473 Archive entries
-and verified 17 uploads in total; three media errors were retained. Latest
-manifest uploaded total was 239. Trial 39385724694 verified 49 albums, 1,631 album memberships and 12,104
-inventoried media, with manifest uploaded total 244. It uploaded 5/10 and
-retained original-URL failures. Retry-only trial 39386517817 is running against retained failures using the
-read-only pLFTfd signed-original fallback. Production release is merged via PR #5.
-Full-budget run 39386977931 is queued after the trial; it resumes durable state.
-Only schedule/manual triggers remain after this one-time release kickoff.
-Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
-`inventory_complete` describes one finished traversal, not a verified full backup.
-One inaccessible source keeps its cursor and is deferred, allowing other sources
-to continue. Source failures remain visible in the final report.
-Backfill health is in Actions Summary and a 7-day JSON artifact. Existing Daily
-homepage publishing is unchanged; its publisher authorizes Daily only.
-Shared album originals may be inaccessible and are left as errors; library is
-never modified to obtain them. Rollback: restore previous Backfill module command.
+- Daily 03:17 ICT: engine 25 phút / job 40 phút.
+- Backfill **04:45 ICT mỗi ngày**: engine 5 giờ / job 330 phút; chỉ schedule/manual.
+- Worker hiện hành: `src/gphotos_web_backup.py`; giữ manifest và Daily checkpoint, quét luân phiên Photos/Archive/album.
+- 29 tests pass. Lượt retry [39386517817](https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/39386517817) SUCCESS: 10/10 uploaded, 0 lỗi trong lượt.
+- Snapshot sau lượt retry: **12.713 mục đã kiểm kê, 254 uploaded trong manifest, 12.456 pending_seen, 4 pending_errors, 49 album, 2.240 quan hệ album–ảnh**; inventory_complete=false.
+- Lượt dài [39386977931](https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/39386977931) đang chạy tại thời điểm cập nhật; cần đọc kết quả cuối lượt trước khi đánh giá tốc độ hoặc tiến độ mới.
+- Chưa chứng minh backup đầy đủ hoặc duyệt xong nội dung tất cả album. Không dùng bootstrap_complete cũ hoặc một job xanh để kết luận đã đủ.
+- Homepage publishing Daily giữ nguyên; Backfill báo cáo qua Actions Summary/artifact.
 
 # AI HANDOVER / PROJECT CONTEXT
 
 > Read this file first when continuing development with another AI or in a new conversation.
 > Repository: `hunghvt-cyber/google-photos-koofr`
-> Last updated: 2026-10-15
-> Production status: operational
+> Last updated: 2026-10-20
+> Production status: upgrade deployed; full-budget run under verification
 
 ## 2026-10-15 active free-tier scheduling and safe-shutdown policy
 
-**CURRENT SOURCE OF TRUTH:** [docs/FREE_TIER_BUDGET.md](docs/FREE_TIER_BUDGET.md).
+**HISTORICAL POLICY (superseded 2026-10-20):** [docs/FREE_TIER_BUDGET.md](docs/FREE_TIER_BUDGET.md).
 This section supersedes all older "Daily Backfill at 04:45" and
 "35-minute historical Backfill" statements in archived incident history.
 

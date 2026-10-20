@@ -24,7 +24,7 @@ jobs:
   backfill:
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
-    timeout-minutes: 330
+    timeout-minutes: ${{ github.event_name == 'push' && 30 || 330 }}
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
@@ -83,7 +83,7 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s 18300s \
+          timeout --signal=INT --kill-after=30s ${{ github.event_name == 'push' && '1200s' || '18300s' }} \
             python3 -m src.gphotos_web_backup --scan-seconds ${{ github.event_name == 'push' && '60' || '600' }} 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
@@ -123,6 +123,8 @@ jobs:
       - name: Historical backfill report
         if: always()
         shell: bash
+        env:
+          BACKUP_RESULT: ${{ steps.backfill.outcome }}
         run: |
           python3 - <<'PY'
           import json, os, pathlib
@@ -141,6 +143,40 @@ jobs:
                   report += ['', '**Note:** Historical library coverage is not complete; inspect scan status before increasing quotas.']
           else:
               report = ['## Google Photos Historical Backfill','','No final summary; inspect the job logs for an unexpected crash.']
+          from datetime import datetime, timezone
+          health = dict(d) if candidates else {}
+          health['status'] = 'SUCCESS' if candidates and os.environ['BACKUP_RESULT'] == 'success' else 'FAILED / INCOMPLETE'
+          health['generated_at_utc'] = datetime.now(timezone.utc).isoformat()
+          health['bootstrap_complete'] = False
+          (pathlib.Path(os.environ['RUNNER_TEMP']) / 'daily-health.json').write_text(json.dumps(health))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
               out.write('\n'.join(report) + '\n')
           PY
+
+      - name: Publish Google Photos health (selected report backend)
+        if: always()
+        shell: bash
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          REPORT_BACKEND: ${{ vars.REPORT_BACKEND || 'gas-drive' }}
+          REPORT_GAS_URL: ${{ vars.REPORT_GAS_URL }}
+          REPORT_GAS_KEY: ${{ secrets.REPORT_GAS_KEY }}
+        run: |
+          python3 scripts/backup-summary.py
+          case "$REPORT_BACKEND" in
+            gas-drive)
+              python3 scripts/publish_gas_report.py gphotos-backup-summary.json
+              ;;
+            blob)
+              if [ -z "$BLOB_READ_WRITE_TOKEN" ]; then
+                echo "::notice::BLOB_READ_WRITE_TOKEN missing; report publishing disabled."
+                exit 0
+              fi
+              python3 -m pip install --disable-pip-version-check 'vercel==0.11.6'
+              python3 scripts/publish_blob_report.py gphotos-backup-summary.json gphotos-backup-latest.json
+              ;;
+            *)
+              echo "::error::Unsupported report backend."
+              exit 1
+              ;;
+          esac

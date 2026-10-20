@@ -107,10 +107,12 @@ class WebBackup:
     def download_original(self, media_id):
         row = self.db.execute('SELECT album FROM web_items WHERE id=?', (media_id,)).fetchone()
         info = execute(self.client, payloads.GetItemInfo(media_key=media_id, album_media_key=row[0] if row else None))
-        original = info.download_original_url
+        ext = execute(self.client, payloads.GetItemInfoExt(media_key=media_id))
+        # For unedited owned media Google supplies only download_url. Require
+        # its byte size to match source metadata before accepting that endpoint.
+        original = info.download_original_url or (info.download_url if ext.size else None)
         if not original or urlparse(original).scheme != 'https' or not any((urlparse(original).hostname or '').endswith('.' + domain) for domain in ('googleusercontent.com', 'google.com')):
             raise RuntimeError('Original download URL unavailable; refusing thumbnail fallback')
-        ext = execute(self.client, payloads.GetItemInfoExt(media_key=media_id))
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
             raise RuntimeError('Original filename missing')

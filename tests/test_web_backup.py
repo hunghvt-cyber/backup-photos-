@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from src.gphotos_sync import DB
 from src.gphotos_web_backup import WebBackup
 
@@ -59,8 +59,28 @@ class WebInventoryTests(unittest.TestCase):
         self.assertEqual(get.call_args.args[1].data[0], 'page2')
         self.assertEqual(get.call_args.args[1].data[-1], 2)
 
+    def test_unedited_original_requires_matching_source_size(self):
+        self.e.wd = Path(self.tmp.name)
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {'Content-Type': 'image/jpeg'}
+        response.iter_content.return_value = [b'original']
+        client = NS(session=NS(get=MagicMock(return_value=response)))
+        self.web.client = client
+        metadata = [NS(download_original_url=None, download_url='https://lh3.googleusercontent.com/original'),
+                    NS(file_name='photo.jpg', size=8)]
+        with patch('src.gphotos_web_backup.execute', side_effect=metadata):
+            path, name = self.web.download(None, '', 'x')
+        self.assertEqual(path.read_bytes(), b'original')
+        self.assertEqual(name, 'photo.jpg')
+        response.iter_content.return_value = [b'bad']
+        with patch('src.gphotos_web_backup.execute', side_effect=metadata):
+            with self.assertRaises(RuntimeError):
+                self.web.download(None, '', 'x')
+        self.assertFalse(path.exists())
+
     def test_missing_original_never_downloads_thumbnail(self):
-        with patch('src.gphotos_web_backup.execute', return_value=NS(download_original_url=None)):
+        with patch('src.gphotos_web_backup.execute', side_effect=[NS(download_original_url=None, download_url=None), NS(size=123)]):
             with self.assertRaisesRegex(RuntimeError, 'Web original download failed'):
                 self.web.download(None, 'unused', 'a')
 

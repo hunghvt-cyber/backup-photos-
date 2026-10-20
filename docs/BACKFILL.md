@@ -1,29 +1,4 @@
-## 2026-10-20 public-runner upgrade — current policy
-
-Both Photos and Drive repositories were verified public. The old private-repository
-2,000-minute budget below is historical and no longer controls Photos schedules.
-Daily now has a 25-minute engine budget / 40-minute job cap. Historical Backfill
-runs daily at 04:45 ICT, with a 5-hour engine / 330-minute job cap.
-
-`src/gphotos_web_backup.py` replaces grid scrolling in Backfill with pinned gpwc
-read-only requests: Archive, library, album list, every album page. SQLite tables
-`web_tasks`, `web_items`, `web_albums`, `web_album_items` extend the existing
-manifest without resetting media or Daily checkpoints. Pagination and membership
-are saved to Koofr after each page. Album metadata stays private in manifest.sqlite;
-photos are stored once under Photos, not duplicated into album directories.
-
-Downloads require original URL and filename, compare expected size when available,
-then reuse existing SHA/Koofr verification. Missing originals are errors; no
-thumbnail substitution. There are no Google mutations/deletions. Failed items
-rotate behind unattempted items. The encrypted Chrome profile supplies temporary
-cookies; plaintext cookies are deleted and never committed or uploaded.
-
-Local validation: 25 tests pass. Live validation pending: feature-branch push
-executes a bounded 10-item / 15-minute engine trial, with 60-second inventory.
-Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
-`inventory_complete` describes one finished traversal, not a verified full backup.
-Shared album originals may be inaccessible and are left as errors; library is
-never modified to obtain them. Rollback: restore previous Backfill module command.
+> Current public-runner policy and web backup upgrade: see [AI_CONTEXT.md](../AI_CONTEXT.md). Older budget and grid-scanner notes below are historical.
 
 # Google Photos Historical Backfill — Grid Scanner V2
 

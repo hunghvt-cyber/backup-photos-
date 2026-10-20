@@ -18,7 +18,9 @@ thumbnail substitution. There are no Google mutations/deletions. Failed items
 rotate behind unattempted items. The encrypted Chrome profile supplies temporary
 cookies; plaintext cookies are deleted and never committed or uploaded.
 
-Local validation: 25 tests pass. Live validation pending: feature-branch push
+Local validation: 26 tests pass. First live trial 39385139058 found 5,473 Archive entries and verified 9/10
+uploads (one retained error), manifest uploaded total 231. Further validation
+is in progress. Feature-branch push
 executes a bounded 10-item / 15-minute engine trial, with 60-second inventory.
 Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
 `inventory_complete` describes one finished traversal, not a verified full backup.

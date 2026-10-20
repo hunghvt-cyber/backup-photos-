@@ -41,6 +41,7 @@ class WebInventoryTests(unittest.TestCase):
         self.assertFalse(self.e.db.c.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone())
 
     def test_cursor_saved_only_after_page_success_and_resumes(self):
+        self.e.db.c.execute("UPDATE web_tasks SET done=1 WHERE key!='archive'")
         calls = []
         def respond(client, request):
             calls.append(request.data)

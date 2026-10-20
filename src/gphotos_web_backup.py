@@ -42,6 +42,17 @@ def taken(item):
     return (datetime.fromtimestamp(ts / 1000, timezone.utc) + timedelta(seconds=offset)).replace(tzinfo=None).isoformat() if ts else None
 
 
+class DownloadError(RuntimeError):
+    """Safe diagnostic code without URLs or credentials."""
+
+
+class BoundedClient(Client):
+    def get_global_data(self):
+        # Bound authentication/bootstrap requests as well as subsequent RPCs.
+        self.session.request = functools.partial(self.session.request, timeout=(30, 120))
+        return super().get_global_data()
+
+
 class WebBackup:
     def __init__(self, engine, client):
         self.e, self.client = engine, client
@@ -52,6 +63,8 @@ class WebBackup:
         CREATE TABLE IF NOT EXISTS web_albums(id TEXT PRIMARY KEY,title TEXT,item_count INTEGER);
         CREATE TABLE IF NOT EXISTS web_album_items(album TEXT,id TEXT,PRIMARY KEY(album,id));
         ''')
+        if 'turn' not in {row[1] for row in self.db.execute('PRAGMA table_info(web_tasks)')}:
+            self.db.execute('ALTER TABLE web_tasks ADD COLUMN turn INTEGER DEFAULT 0')
         for key in ('archive', 'library'):
             self.db.execute('INSERT OR IGNORE INTO web_tasks(kind,key) VALUES(?,?)', ('timeline', key))
         self.db.execute("INSERT OR IGNORE INTO web_tasks(kind,key) VALUES('albums','index')")
@@ -64,7 +77,7 @@ class WebBackup:
             self.db.execute('UPDATE web_tasks SET page=NULL,done=0')
             self.db.commit()
         while time.monotonic() < until and self.e.left() > 300:
-            task = self.db.execute("SELECT kind,key,page FROM web_tasks WHERE done=0 ORDER BY CASE kind WHEN 'timeline' THEN 0 WHEN 'albums' THEN 1 ELSE 2 END,key LIMIT 1").fetchone()
+            task = self.db.execute("SELECT kind,key,page FROM web_tasks WHERE done=0 ORDER BY turn,CASE kind WHEN 'timeline' THEN 0 WHEN 'albums' THEN 1 ELSE 2 END,key LIMIT 1").fetchone()
             if not task:
                 break
             kind, key, page = task
@@ -92,7 +105,7 @@ class WebBackup:
             token = result.next_page_id
             if token and token == page:
                 raise RuntimeError('Inventory pagination stalled')
-            self.db.execute('UPDATE web_tasks SET page=?,done=? WHERE kind=? AND key=?', (token, int(not token), kind, key))
+            self.db.execute('UPDATE web_tasks SET page=?,done=?,turn=(SELECT COALESCE(MAX(turn),0)+1 FROM web_tasks) WHERE kind=? AND key=?', (token, int(not token), kind, key))
             self.db.commit()
             self.e.stats['discovered'] += len(result.items) if kind != 'albums' else 0
             self.e.flush()
@@ -102,7 +115,7 @@ class WebBackup:
         try:
             return self.download_original(media_id)
         except Exception as exc:
-            raise RuntimeError("Web original download failed: " + type(exc).__name__) from None
+            raise RuntimeError("Web original download failed: " + (str(exc) if isinstance(exc, DownloadError) else type(exc).__name__)) from None
 
     def download_original(self, media_id):
         row = self.db.execute('SELECT album FROM web_items WHERE id=?', (media_id,)).fetchone()
@@ -112,23 +125,23 @@ class WebBackup:
         # its byte size to match source metadata before accepting that endpoint.
         original = info.download_original_url or (info.download_url if ext.size else None)
         if not original or urlparse(original).scheme != 'https' or not any((urlparse(original).hostname or '').endswith('.' + domain) for domain in ('googleusercontent.com', 'google.com')):
-            raise RuntimeError('Original download URL unavailable; refusing thumbnail fallback')
+            raise DownloadError('ORIGINAL_URL_MISSING')
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
-            raise RuntimeError('Original filename missing')
+            raise DownloadError('ORIGINAL_FILENAME_MISSING')
         dst = self.e.wd / (media_id + '__' + name)
         try:
             with self.client.session.get(original, stream=True, timeout=(30, 120)) as response:
                 response.raise_for_status()
                 if 'text/html' in response.headers.get('Content-Type', ''):
-                    raise RuntimeError('Download returned HTML')
+                    raise DownloadError('HTML_INSTEAD_OF_MEDIA')
                 with dst.open('wb') as out:
                     for chunk in response.iter_content(1024 * 1024):
                         if self.e.left() < 180:
-                            raise RuntimeError('Download stop reserve reached')
+                            raise DownloadError('STOP_RESERVE')
                         out.write(chunk)
                 if not dst.stat().st_size or (ext.size and dst.stat().st_size != ext.size):
-                    raise RuntimeError('Original size verification failed')
+                    raise DownloadError('ORIGINAL_SIZE_MISMATCH')
             return dst, name
         except BaseException:
             dst.unlink(missing_ok=True)
@@ -159,6 +172,7 @@ class WebBackup:
         report = {**self.e.stats, 'inventory_complete': complete, 'inventory_error': inventory_error,
                   'manifest_uploaded_total': counts.get('uploaded', 0),
                   'pending_seen': counts.get('seen', 0), 'pending_errors': counts.get('error', 0),
+                  'inventoried_total': self.db.execute('SELECT COUNT(*) FROM web_items').fetchone()[0],
                   'albums': self.db.execute('SELECT COUNT(*) FROM web_albums').fetchone()[0],
                   'album_memberships': self.db.execute('SELECT COUNT(*) FROM web_album_items').fetchone()[0],
                   'probe': probe, 'status': 'PARTIAL' if inventory_error or self.e.stats['errors'] else 'PAUSED'}
@@ -191,8 +205,7 @@ def main():
                 context.close()
         # gpwc logs the account email at INFO. Disable before constructing it.
         logging.disable(logging.CRITICAL)
-        client = Client(cookie_path, log_level='CRITICAL')
-        client.session.request = functools.partial(client.session.request, timeout=(30, 120))
+        client = BoundedClient(cookie_path, log_level='CRITICAL')
         return WebBackup(e, client).run(a.scan_seconds, a.probe)
     except Exception as exc:
         print('WEB_FATAL type=' + type(exc).__name__, flush=True)

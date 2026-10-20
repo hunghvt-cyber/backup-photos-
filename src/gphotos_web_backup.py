@@ -42,6 +42,17 @@ def taken(item):
     return (datetime.fromtimestamp(ts / 1000, timezone.utc) + timedelta(seconds=offset)).replace(tzinfo=None).isoformat() if ts else None
 
 
+def first_https(value):
+    if isinstance(value, str) and value.startswith('https://'):
+        return value
+    if isinstance(value, list):
+        for child in value:
+            found = first_https(child)
+            if found:
+                return found
+    return None
+
+
 class DownloadError(RuntimeError):
     """Safe diagnostic code without URLs or credentials."""
 
@@ -137,7 +148,11 @@ class WebBackup:
         # For unedited owned media Google supplies only download_url. Require
         # its byte size to match source metadata before accepting that endpoint.
         original = info.download_original_url or (info.download_url if ext.size else None)
-        if not original or urlparse(original).scheme != 'https' or not any((urlparse(original).hostname or '').endswith('.' + domain) for domain in ('googleusercontent.com', 'google.com')):
+        if not original:
+            request = payloads.GetUnsupportedVideoDownloadUrl(media_keys=[media_id], parse_response=False)
+            request.data = [[media_id], [1]]
+            original = first_https(execute(self.client, request))
+        if not original or urlparse(original).scheme != 'https' or not any((urlparse(original).hostname or '').endswith('.' + domain) for domain in ('googleusercontent.com', 'google.com', 'googlevideo.com')):
             raise DownloadError('ORIGINAL_URL_MISSING')
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
@@ -172,6 +187,8 @@ class WebBackup:
         self.e.download = self.download
         if not probe:
             rows = self.db.execute("SELECT m.id,m.type,m.url,m.label,m.created FROM media m JOIN web_items w ON w.id=m.id WHERE m.status!='uploaded' ORDER BY COALESCE(w.last_attempt,''),m.first_seen,m.id").fetchall()
+            if os.environ.get('WEB_RETRY_ONLY') == '1':
+                rows = [r for r in rows if self.db.execute("SELECT status FROM media WHERE id=?", (r[0],)).fetchone()[0] == 'error']
             for row in rows:
                 if self.e.left() < 300 or self.e.stats['attempted'] >= self.e.a.maxitems:
                     break

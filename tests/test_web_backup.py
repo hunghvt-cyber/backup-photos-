@@ -104,8 +104,25 @@ class WebInventoryTests(unittest.TestCase):
                 self.web.download(None, '', 'x')
         self.assertFalse(path.exists())
 
+    def test_signed_original_rpc_fallback_preserves_size_check(self):
+        self.e.wd = Path(self.tmp.name)
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {'Content-Type': 'video/mp4'}
+        response.iter_content.return_value = [b'video']
+        self.web.client = NS(session=NS(get=MagicMock(return_value=response)))
+        with patch('src.gphotos_web_backup.execute', side_effect=[
+                NS(download_original_url=None, download_url=None),
+                NS(file_name='clip.mp4', size=5),
+                [[None, 'https://video-downloads.googleusercontent.com/original']]]) as rpc:
+            path, name = self.web.download(None, '', 'video')
+        self.assertEqual(path.read_bytes(), b'video')
+        request = rpc.call_args.args[1]
+        self.assertEqual(request.rpcid, 'pLFTfd')
+        self.assertEqual(request.data, [['video'], [1]])
+
     def test_missing_original_never_downloads_thumbnail(self):
-        with patch('src.gphotos_web_backup.execute', side_effect=[NS(download_original_url=None, download_url=None), NS(size=123)]):
+        with patch('src.gphotos_web_backup.execute', side_effect=[NS(download_original_url=None, download_url=None), NS(size=123), []]):
             with self.assertRaisesRegex(RuntimeError, 'Web original download failed'):
                 self.web.download(None, 'unused', 'a')
 

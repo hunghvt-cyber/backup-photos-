@@ -1,3 +1,5 @@
+> Current public-runner policy and web backup upgrade: see [AI_CONTEXT.md](../AI_CONTEXT.md). Older budget and grid-scanner notes below are historical.
+
 # Google Photos Historical Backfill — Grid Scanner V2
 
 ## Current status

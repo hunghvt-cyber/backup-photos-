@@ -166,11 +166,10 @@ jobs:
           retention-days: 90
       - name: Publish Google Photos health (selected report backend)
         if: always()
-        continue-on-error: true
         shell: bash
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
-          REPORT_BACKEND: ${{ vars.REPORT_BACKEND || 'blob' }}
+          REPORT_BACKEND: ${{ vars.REPORT_BACKEND || 'gas-drive' }}
           REPORT_GAS_URL: ${{ vars.REPORT_GAS_URL }}
           REPORT_GAS_KEY: ${{ secrets.REPORT_GAS_KEY }}
         run: |

@@ -77,3 +77,8 @@ class BackupPublisherTests(unittest.TestCase):
         def request(url,body):calls.append(1);return ack(body,ok=False,code='STALE_REPORT')
         with self.assertRaisesRegex(ValueError,'STALE_REPORT'):publish(report,env,request=request,pause=lambda n:self.fail('no retry'))
         self.assertEqual(len(calls),1)
+
+    def test_diagnostics_never_echo_unknown_exception_or_secret(self):
+        from publish_gas_report import safe_error
+        self.assertEqual(safe_error(ValueError('AUTH_DENIED')), 'AUTH_DENIED')
+        self.assertEqual(safe_error(ValueError('private '+KEY)), 'REQUEST_FAILED')

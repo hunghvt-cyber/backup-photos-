@@ -1,0 +1,18 @@
+name: Verify report transport only
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  report-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify source key and signed GAS ACK without publishing
+        env:
+          REPORT_GAS_URL: ${{ vars.REPORT_GAS_URL }}
+          REPORT_GAS_KEY: ${{ secrets.REPORT_GAS_KEY }}
+        run: python3 scripts/publish_gas_report.py --probe

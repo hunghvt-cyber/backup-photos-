@@ -18,9 +18,12 @@ thumbnail substitution. There are no Google mutations/deletions. Failed items
 rotate behind unattempted items. The encrypted Chrome profile supplies temporary
 cookies; plaintext cookies are deleted and never committed or uploaded.
 
-Local validation: 28 tests pass. First live trials 39385139058 and 39385325939 found 9,473 Archive entries
+Local validation: 29 tests pass. First live trials 39385139058 and 39385325939 found 9,473 Archive entries
 and verified 17 uploads in total; three media errors were retained. Latest
-manifest uploaded total was 239. Third trial verifies source rotation/albums.
+manifest uploaded total was 239. Trial 39385724694 verified 49 albums, 1,631 album memberships and 12,104
+inventoried media, with manifest uploaded total 244. It uploaded 5/10 and
+retained original-URL failures. A fourth retry-only trial validates the
+read-only pLFTfd signed-original fallback.
 Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
 `inventory_complete` describes one finished traversal, not a verified full backup.
 One inaccessible source keeps its cursor and is deferred, allowing other sources

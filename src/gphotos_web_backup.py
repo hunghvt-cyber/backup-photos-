@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 from gpwc import Client, payloads
-from src.gphotos_sync import Engine, cmd, now
+from src.gphotos_sync import Engine, now
 
 
 def export_cookies(context, path):

@@ -8,7 +8,7 @@ on:
         required: false
         default: "10000"
   push:
-    branches: [main, upgrade/web-inventory-20261020]
+    branches: [main]
   schedule:
     # Every day 04:45 Vietnam. Serialized with Daily and Reconcile.
     - cron: "45 21 * * *"
@@ -24,15 +24,13 @@ jobs:
   backfill:
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
-    timeout-minutes: ${{ github.ref != 'refs/heads/main' && 30 || 330 }}
+    timeout-minutes: 330
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: ${{ github.ref != 'refs/heads/main' && '900' || '18000' }}
-      MAX_SCAN_SECONDS: "180"
-      MAX_ITEMS: ${{ github.ref != 'refs/heads/main' && '10' || inputs.max_items || '10000' }}
-      WEB_RETRY_ONLY: ${{ github.ref != 'refs/heads/main' && '1' || '0' }}
+      MAX_RUNTIME_SECONDS: "18000"
+      MAX_ITEMS: ${{ inputs.max_items || '10000' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and configure runtime
@@ -84,8 +82,8 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s ${{ github.ref != 'refs/heads/main' && '1200s' || '18300s' }} \
-            python3 -m src.gphotos_web_backup --scan-seconds ${{ github.ref != 'refs/heads/main' && '15' || '600' }} 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          timeout --signal=INT --kill-after=30s 18300s \
+            python3 -m src.gphotos_web_backup --scan-seconds 600 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -134,7 +132,7 @@ jobs:
           candidates = [x.split('WEB_SUMMARY=', 1)[1] for x in lines if 'WEB_SUMMARY=' in x]
           if candidates:
               d = json.loads(candidates[-1])
-              keys = ('inventory_complete','inventory_error','albums','album_memberships','inventoried_total','status','scan_status','scan_rounds','scan_seconds','download_seconds','unique_visible','discovered','attempted','uploaded','uploaded_per_hour','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
+              keys = ('inventory_complete','inventory_error','albums','album_memberships','inventoried_total','status','discovered','attempted','uploaded','skipped','errors','manifest_uploaded_total','pending_seen','pending_errors')
               report = ['## Google Photos Historical Backfill','', '| Metric | Value |','|---|---|']
               report += [f'| {k} | {d.get(k, "N/A")} |' for k in keys]
               if d.get('errors', 0):

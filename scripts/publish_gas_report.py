@@ -151,9 +151,43 @@ def publish(report, env, request=request_json, pause=time.sleep):
             pause(attempt+1)
 
 
+SAFE_ERRORS = frozenset(('ACK_UNSIGNED','ACK_INVALID','ACK_WRONG_REQUEST','ACK_WRONG_CONTENT',
+    'AUTH_DENIED','NOT_CONFIGURED','BUSY','REQUEST_EXPIRED','REPORT_REJECTED',
+    'STALE_REPORT','REPORT_CONFLICT','RUN_ID_MISMATCH','IDEMPOTENCY_MISMATCH',
+    'INVALID_REPORT_KEY','INVALID_REPORT_URL','REPORT_HTTP_FAILED','REPORT_REDIRECT_FORBIDDEN',
+    'REPORT_RESPONSE_TOO_LARGE','INVALID_BACKUP_REPORT'))
+
+def safe_error(error):
+    return str(error) if str(error) in SAFE_ERRORS else 'REQUEST_FAILED'
+
+def probe(env):
+    source = SOURCES[env['GITHUB_REPOSITORY']][0]
+    key = env.get('REPORT_GAS_KEY','')
+    if not re.fullmatch(r'[a-f0-9]{64}',key):
+        raise ValueError('INVALID_REPORT_KEY')
+    payload = json.dumps({'version':1,'source':source,'op':'logs','issuedAt':int(time.time()*1000),
+                          'requestId':str(uuid.uuid4())},separators=(',',':'))
+    body=json.dumps({'payload':payload,'signature':hmac.new(key.encode(),payload.encode(),hashlib.sha256).hexdigest()}).encode()
+    result=request_json(endpoint(env.get('REPORT_GAS_URL','')),body)
+    signed,signature=result.get('payload'),result.get('signature')
+    if not isinstance(signed,str) or not isinstance(signature,str):
+        code=result.get('code')
+        raise ValueError(code if code in ('AUTH_DENIED','NOT_CONFIGURED') else 'ACK_UNSIGNED')
+    if not hmac.compare_digest(hmac.new(key.encode(),signed.encode(),hashlib.sha256).hexdigest(),signature):
+        raise ValueError('ACK_INVALID')
+    ack=json.loads(signed)
+    if ack.get('requestId') != json.loads(payload)['requestId']:
+        raise ValueError('ACK_WRONG_REQUEST')
+    if ack.get('ok') is not True:
+        raise ValueError(ack.get('code') if ack.get('code') in SAFE_ERRORS else 'REPORT_REJECTED')
+    print(json.dumps({'source':source,'signed_ack':True,'codes':[e.get('code') for e in ack.get('events',[]) if e.get('code') in ('COMMITTED','REPLAY','INVALID_BACKUP_REPORT')]}))
+
+
 def main():
     if len(sys.argv) != 2:
         raise ValueError('REPORT_FILE_REQUIRED')
+    if sys.argv[1] == '--probe':
+        return probe(os.environ)
     path = Path(sys.argv[1])
     with path.open('rb') as handle:
         raw = handle.read(8193)
@@ -166,6 +200,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except Exception:
-        print('BACKUP_REPORT_PUBLISH_FAILED',file=sys.stderr)
+    except Exception as error:
+        print('BACKUP_REPORT_PUBLISH_FAILED: '+safe_error(error),file=sys.stderr)
         raise SystemExit(1)

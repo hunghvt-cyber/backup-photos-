@@ -18,12 +18,15 @@ thumbnail substitution. There are no Google mutations/deletions. Failed items
 rotate behind unattempted items. The encrypted Chrome profile supplies temporary
 cookies; plaintext cookies are deleted and never committed or uploaded.
 
-Local validation: 26 tests pass. First live trial 39385139058 found 5,473 Archive entries and verified 9/10
-uploads (one retained error), manifest uploaded total 231. Further validation
-is in progress. Feature-branch push
-executes a bounded 10-item / 15-minute engine trial, with 60-second inventory.
+Local validation: 28 tests pass. First live trials 39385139058 and 39385325939 found 9,473 Archive entries
+and verified 17 uploads in total; three media errors were retained. Latest
+manifest uploaded total was 239. Third trial verifies source rotation/albums.
 Do not claim full coverage or throughput before real WEB_PAGE/WEB_SUMMARY logs.
 `inventory_complete` describes one finished traversal, not a verified full backup.
+One inaccessible source keeps its cursor and is deferred, allowing other sources
+to continue. Source failures remain visible in the final report.
+Backfill health is in Actions Summary and a 7-day JSON artifact. Existing Daily
+homepage publishing is unchanged; its publisher authorizes Daily only.
 Shared album originals may be inaccessible and are left as errors; library is
 never modified to obtain them. Rollback: restore previous Backfill module command.
 

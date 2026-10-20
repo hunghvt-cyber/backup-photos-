@@ -49,16 +49,40 @@ class WebInventoryTests(unittest.TestCase):
                 return NS(items=[item('a')], next_page_id='page2')
             raise RuntimeError('network')
         with patch('src.gphotos_web_backup.execute', side_effect=respond):
-            with self.assertRaises(RuntimeError):
-                self.web.inventory(5)
+            self.web.inventory(5)
+        self.assertEqual(self.web.inventory_failures, 1)
         row = self.e.db.c.execute("SELECT page,done FROM web_tasks WHERE key='archive'").fetchone()
         self.assertEqual(row, ('page2', 0))
         restarted = WebBackup(self.e, object())
         with patch('src.gphotos_web_backup.execute', side_effect=RuntimeError) as get:
-            with self.assertRaises(RuntimeError):
-                restarted.inventory(5)
+            restarted.inventory(5)
         self.assertEqual(get.call_args.args[1].data[0], 'page2')
         self.assertEqual(get.call_args.args[1].data[-1], 2)
+
+    def test_large_archive_does_not_starve_library_or_album_index(self):
+        calls = []
+        def respond(client, request):
+            calls.append((request.rpcid, request.data))
+            if len(calls) == 4:
+                self.e.left = lambda: 0
+                raise RuntimeError('stop fixture')
+            return NS(items=[], next_page_id='next-' + str(len(calls)))
+        with patch('src.gphotos_web_backup.execute', side_effect=respond):
+            self.web.inventory(5)
+        self.assertEqual(calls[0][1][-1], 2)
+        self.assertEqual(calls[1][1][-1], 1)
+        self.assertEqual(calls[2][0], 'Z5xsfc')
+
+    def test_failed_archive_keeps_cursor_and_other_sources_continue(self):
+        def respond(client, request):
+            if request.rpcid == 'lcxiM' and request.data[-1] == 2:
+                raise RuntimeError('unavailable archive')
+            return NS(items=[], next_page_id=None)
+        with patch('src.gphotos_web_backup.execute', side_effect=respond):
+            self.web.inventory(5)
+        rows = dict(self.e.db.c.execute('SELECT key,done FROM web_tasks'))
+        self.assertEqual(rows, {'archive': 0, 'library': 1, 'index': 1})
+        self.assertEqual(self.web.inventory_failures, 1)
 
     def test_unedited_original_requires_matching_source_size(self):
         self.e.wd = Path(self.tmp.name)

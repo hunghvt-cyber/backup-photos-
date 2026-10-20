@@ -56,6 +56,7 @@ class BoundedClient(Client):
 class WebBackup:
     def __init__(self, engine, client):
         self.e, self.client = engine, client
+        self.inventory_failures = 0
         self.db = engine.db.c
         self.db.executescript('''
         CREATE TABLE IF NOT EXISTS web_tasks(kind TEXT,key TEXT,page TEXT,done INTEGER DEFAULT 0,PRIMARY KEY(kind,key));
@@ -72,12 +73,14 @@ class WebBackup:
 
     def inventory(self, seconds):
         until = time.monotonic() + seconds
+        failed_tasks = set()
         # Repeat complete inventories on later runs; partial traversals resume exactly.
         if not self.db.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone():
             self.db.execute('UPDATE web_tasks SET page=NULL,done=0')
             self.db.commit()
         while time.monotonic() < until and self.e.left() > 300:
-            task = self.db.execute("SELECT kind,key,page FROM web_tasks WHERE done=0 ORDER BY turn,CASE kind WHEN 'timeline' THEN 0 WHEN 'albums' THEN 1 ELSE 2 END,key LIMIT 1").fetchone()
+            tasks = self.db.execute("SELECT kind,key,page FROM web_tasks WHERE done=0 ORDER BY turn,CASE kind WHEN 'timeline' THEN 0 WHEN 'albums' THEN 1 ELSE 2 END,key").fetchall()
+            task = next((t for t in tasks if t[:2] not in failed_tasks), None)
             if not task:
                 break
             kind, key, page = task
@@ -87,7 +90,17 @@ class WebBackup:
                 request = payloads.GetAlbumsPage(page_id=page)
             else:
                 request = payloads.GetAlbumPage(media_key=key, page_id=page)
-            result = execute(self.client, request)
+            try:
+                result = execute(self.client, request)
+            except Exception as exc:
+                # Keep this source cursor, but let other sources progress.
+                failed_tasks.add((kind, key))
+                self.inventory_failures += 1
+                self.db.execute('UPDATE web_tasks SET turn=(SELECT COALESCE(MAX(turn),0)+1 FROM web_tasks) WHERE kind=? AND key=?', (kind, key))
+                self.db.commit()
+                self.e.flush()
+                print('WEB_SOURCE_ERROR source=' + kind + ' type=' + type(exc).__name__, flush=True)
+                continue
             if not hasattr(result, 'items') or not hasattr(result, 'next_page_id'):
                 raise RuntimeError('Unexpected inventory response schema')
             for item in result.items:
@@ -155,6 +168,7 @@ class WebBackup:
             inventory_error = True
             # Do not log signed URLs, tokens, cookies or personal album titles.
             print('WEB_INVENTORY_ERROR type=' + type(exc).__name__, flush=True)
+        inventory_error = inventory_error or self.inventory_failures > 0
         self.e.download = self.download
         if not probe:
             rows = self.db.execute("SELECT m.id,m.type,m.url,m.label,m.created FROM media m JOIN web_items w ON w.id=m.id WHERE m.status!='uploaded' ORDER BY COALESCE(w.last_attempt,''),m.first_seen,m.id").fetchall()

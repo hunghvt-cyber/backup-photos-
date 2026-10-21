@@ -150,7 +150,7 @@ class GridBackfillTests(unittest.TestCase):
 
             def cmd_fake(*args, **kwargs):
                 if args[:2] == ("rclone", "lsl"):
-                    return SimpleNamespace(stdout="4 2026-10-15 00:00:00 picture.jpg")
+                    return SimpleNamespace(returncode=0, stdout="4 2026-10-15 00:00:00 picture.jpg")
                 return SimpleNamespace(stdout="", returncode=0)
 
             with patch("src.gphotos_sync.cmd", side_effect=cmd_fake), \

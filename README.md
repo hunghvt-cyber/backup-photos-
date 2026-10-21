@@ -1,3 +1,5 @@
+> Cập nhật 21/10: [download verification và Daily scan](docs/DOWNLOAD-VERIFICATION-20261021.md). Không dùng bootstrap_complete để kết luận đủ thư viện.
+
 > Current state: [20 October upgrade handoff](docs/UPGRADE-20261020.md) and [AI_CONTEXT.md](AI_CONTEXT.md).
 
 # Google Photos → Koofr

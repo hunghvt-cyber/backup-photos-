@@ -142,6 +142,7 @@ jobs:
               'discovered': data.get('discovered'), 'attempted': data.get('attempted'),
               'uploaded': data.get('uploaded'), 'skipped': data.get('skipped'),
               'errors': data.get('errors'), 'boundary_seen': data.get('boundary_seen'),
+              'scan_status': data.get('scan_status'),
               'bootstrap_complete': data.get('checkpoint', {}).get('bootstrap_complete') if isinstance(data.get('checkpoint'), dict) else None,
               'upload_error_lines': len(re.findall(r'^UPLOAD_ERROR', content, re.M)),
               'summary_present': bool(data),
@@ -150,7 +151,7 @@ jobs:
           out.write_text(json.dumps(report, indent=2) + '\n')
           lines = ['## Google Photos daily health', '', f"**Status:** {status}", '',
                    '| Metric | Value |', '|---|---|']
-          for key in ('generated_at_utc','discovered','attempted','uploaded','skipped','errors','boundary_seen','bootstrap_complete','summary_present'):
+          for key in ('generated_at_utc','discovered','attempted','uploaded','skipped','errors','boundary_seen','bootstrap_complete','scan_status','summary_present'):
               lines.append(f"| {key} | {report[key]} |")
           lines.extend(['', f"[Open run]({report['run_url']})"])
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write('\n'.join(lines) + '\n')

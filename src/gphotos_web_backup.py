@@ -145,32 +145,63 @@ class WebBackup:
         row = self.db.execute('SELECT album FROM web_items WHERE id=?', (media_id,)).fetchone()
         info = execute(self.client, payloads.GetItemInfo(media_key=media_id, album_media_key=row[0] if row else None))
         ext = execute(self.client, payloads.GetItemInfoExt(media_key=media_id))
-        # For unedited owned media Google supplies only download_url. Require
-        # its byte size to match source metadata before accepting that endpoint.
-        original = info.download_original_url or (info.download_url if ext.size else None)
-        if not original:
-            request = payloads.GetUnsupportedVideoDownloadUrl(media_keys=[media_id], parse_response=False)
-            request.data = [[media_id], [1]]
-            original = first_https(execute(self.client, request))
-        if not original or urlparse(original).scheme != 'https' or not any((urlparse(original).hostname or '').endswith('.' + domain) for domain in ('googleusercontent.com', 'google.com', 'googlevideo.com')):
-            raise DownloadError('ORIGINAL_URL_MISSING')
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
             raise DownloadError('ORIGINAL_FILENAME_MISSING')
         dst = self.e.wd / (media_id + '__' + name)
+        original = info.download_original_url or (info.download_url if ext.size else None)
+        last_error = None
+        # Try the signed original RPC after a rejected metadata URL as well as
+        # when that URL is absent. Never relax source-size verification.
+        for route in range(2):
+            if self.e.left() < 180:
+                raise DownloadError('STOP_RESERVE')
+            if route == 1:
+                request = payloads.GetUnsupportedVideoDownloadUrl(media_keys=[media_id], parse_response=False)
+                request.data = [[media_id], [1]]
+                original = first_https(execute(self.client, request))
+            if not original:
+                last_error = DownloadError('ORIGINAL_URL_MISSING')
+                continue
+            try:
+                self.fetch_original(original, dst, ext.size)
+                last_error = None
+                return dst, name
+            except DownloadError as exc:
+                last_error = exc
+                if str(exc) == 'STOP_RESERVE':
+                    raise
+            except Exception as exc:
+                # Do not expose signed URLs or response bodies in logs.
+                last_error = DownloadError('ORIGINAL_TRANSPORT_' + type(exc).__name__)
+            finally:
+                if last_error is not None:
+                    dst.unlink(missing_ok=True)
+            if route == 0:
+                print('ORIGINAL_FALLBACK reason=' + str(last_error), flush=True)
+        raise last_error or DownloadError('ORIGINAL_URL_MISSING')
+
+    def fetch_original(self, original, dst, expected_size):
+        def allowed(url):
+            parsed = urlparse(url)
+            return (parsed.scheme == 'https' and not parsed.username and not parsed.password
+                    and any((parsed.hostname or '').endswith('.' + domain)
+                            for domain in ('googleusercontent.com', 'google.com', 'googlevideo.com')))
+        if not allowed(original):
+            raise DownloadError('ORIGINAL_URL_REJECTED')
         try:
             with self.client.session.get(original, stream=True, timeout=(30, 120)) as response:
                 response.raise_for_status()
-                if 'text/html' in response.headers.get('Content-Type', ''):
+                if 'text/html' in response.headers.get('Content-Type', '').lower():
                     raise DownloadError('HTML_INSTEAD_OF_MEDIA')
                 with dst.open('wb') as out:
                     for chunk in response.iter_content(1024 * 1024):
                         if self.e.left() < 180:
                             raise DownloadError('STOP_RESERVE')
                         out.write(chunk)
-                if not dst.stat().st_size or (ext.size and dst.stat().st_size != ext.size):
+                actual = dst.stat().st_size
+                if not actual or (expected_size and actual != expected_size):
                     raise DownloadError('ORIGINAL_SIZE_MISMATCH')
-            return dst, name
         except BaseException:
             dst.unlink(missing_ok=True)
             raise

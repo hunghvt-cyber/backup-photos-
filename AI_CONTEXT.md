@@ -1,3 +1,5 @@
+> Cập nhật 21/10: [download verification và Daily scan](docs/DOWNLOAD-VERIFICATION-20261021.md). Không dùng bootstrap_complete để kết luận đủ thư viện.
+
 ## Trạng thái hiện hành — 20/10/2026
 
 **Đọc [bàn giao nâng cấp 20/10/2026](docs/UPGRADE-20261020.md) trước.** Đây là nguồn hiện hành cho lịch public-runner, Photos/Archive/album, kết quả thử và việc cần kiểm tra tiếp. Các phần phía dưới lưu lịch sử, có thể có lịch và ngân sách đã hết hiệu lực.

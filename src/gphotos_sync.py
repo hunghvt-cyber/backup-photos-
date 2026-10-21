@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, urllib.request
+import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -79,7 +79,15 @@ class Engine:
    with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
     with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
    r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length','if-none-match','if-modified-since','if-range','range')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
-   with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
+   try:
+    with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
+   except urllib.error.HTTPError as exc:
+    if exc.code != 403:raise
+    # The browser already owns a download for this exact media. Use its bytes
+    # rather than repeatedly replaying a URL rejected outside Chrome.
+    dst.unlink(missing_ok=True)
+    print('BROWSER_DOWNLOAD_FALLBACK reason=HTTP_403',flush=True)
+    d.save_as(str(dst))
    if dst.stat().st_size<1:raise RuntimeError('empty download')
    return dst,nm
   finally:
@@ -99,6 +107,19 @@ class Engine:
     finally:check.unlink(missing_ok=True)
    s,x=os.path.splitext(Path(nm).name);base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
   return base,False
+ def verify_remote_size(self,remote,expected):
+  for attempt in range(3):
+   result=cmd('rclone','lsl',remote,'--retries','1','--low-level-retries','1','--contimeout','10s','--timeout','20s',ok=False,cap=True)
+   line=result.stdout.strip() if result.returncode==0 else ''
+   try:actual=int(line.split()[0]) if line else None
+   except (ValueError,IndexError):actual=None
+   if actual==expected:return
+   if actual is not None:
+    raise RuntimeError(f'size mismatch {expected}!={actual}')
+   if attempt==2 or self.left()<190:
+    raise RuntimeError('REMOTE_SIZE_UNCONFIRMED')
+   print(f'REMOTE_VERIFY_RETRY attempt={attempt+1}',flush=True)
+   time.sleep(2*(attempt+1))
  def one(self,pw,i,t,u,l,cr,update_checkpoint=True,flush_state=True):
   self.db.touch(i,t,u,l,cr)
   if self.db.uploaded(i):self.stats['skipped']+=1;return
@@ -116,8 +137,7 @@ class Engine:
      time.sleep(min(attempt*2,5))
    sz=f.stat().st_size;h=sha(f);r,exists=self.remote(cr,nm,i,h,sz)
    if not exists:cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')
-   line=cmd('rclone','lsl',r,cap=True).stdout.strip();rz=int(line.split()[0]) if line else -1
-   if rz!=sz:raise RuntimeError(f'size mismatch {sz}!={rz}')
+   self.verify_remote_size(r,sz)
    self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1
    if update_checkpoint:self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()})
    if flush_state:self.flush()
@@ -133,14 +153,21 @@ class Engine:
   try:
    p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(4000)
    if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
-   for _ in range(len(self.seen)//15):
-    p.keyboard.press('End');p.wait_for_timeout(700)
-   return self.visible(p)
+   # Collect every intermediate viewport instead of jumping straight to End.
+   # Reopen Chrome between batches so item downloads can use the same profile.
+   from src.gphotos_backfill_grid import advance_gallery
+   self._daily_scan_round=getattr(self,'_daily_scan_round',0)+1
+   found={};scan_until=time.monotonic()+60
+   for step in range(self._daily_scan_round*3+1):
+    for row in self.visible(p):found.setdefault(row[0],row)
+    if self.left()<190 or time.monotonic()>=scan_until:break
+    advance_gallery(p,step)
+   return list(found.values())
   finally:
    try:c.close()
    except:pass
  def daily(self):
-  boundary=self.cp.get('newest_id') if self.cp.get('bootstrap_complete') else None;hit=False;head=None;nogrow=0
+  boundary=self.cp.get('newest_id');hit=False;head=None;nogrow=0;scan_status='PAUSED_TIME'
   with sync_playwright() as pw:
    while self.left()>180 and self.stats['attempted']<self.a.maxitems:
     items=self.scan(pw);n=0
@@ -152,10 +179,16 @@ class Engine:
      if self.left()<=180 or self.stats['attempted']>=self.a.maxitems:break
     if hit or self.left()<=180 or self.stats['attempted']>=self.a.maxitems:break
     nogrow=nogrow+1 if n==0 else 0
-    if nogrow>=3:self.cp.update({'bootstrap_complete':True,'bootstrap_completed_at':now()});break
-  if hit and head:self.cp['newest_id']=head
-  elif not self.cp.get('newest_id') and head:self.cp['newest_id']=head
-  self.cp.update({'last_daily_run':now(),'last_daily_stats':self.stats});self.flush();return {'boundary_seen':hit,**self.stats,'checkpoint':self.cp}
+    if nogrow>=3:scan_status='SCAN_STALLED';break
+  if hit:
+   scan_status='BOUNDARY_REACHED'
+   # Keep the old boundary while errors remain so failed newer media can retry.
+   if head and not self.stats['errors']:self.cp['newest_id']=head
+  elif self.stats['attempted']>=self.a.maxitems:scan_status='PAUSED_LIMIT'
+  # A stalled virtual gallery never proves full library coverage. Keep existing
+  # IDs and manifest; retire only the misleading completion claim.
+  self.cp.update({'bootstrap_complete':False,'last_daily_scan_status':scan_status,'last_daily_run':now(),'last_daily_stats':self.stats})
+  self.flush();return {'boundary_seen':hit,'scan_status':scan_status,**self.stats,'checkpoint':self.cp}
  def reconcile(self):
   sp=self.sd/'reconcile-state.json'; st=self.load('reconcile-state.json',{}); g=st.get('generation') if st.get('status')=='PAUSED' else datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'); target=st.get('resume_last_id') if st.get('status')=='PAUSED' else None; resuming=bool(target); st.update({'generation':g,'status':'RUNNING','started_at':st.get('started_at') or now()});savej(sp,st);cmd('rclone','copyto',str(sp),f'{self.a.sroot}/reconcile-state.json'); seen=set();nogrow=0;complete=False;last=target;pending=0
   with sync_playwright() as pw:
@@ -181,7 +214,7 @@ class Engine:
 
 def main():
  a=argparse.ArgumentParser();a.add_argument('mode',choices=['daily','reconcile']);a.add_argument('--profile',default=os.path.expanduser('~/gphotos-profile'));a.add_argument('--chrome',default=os.environ.get('CHROME_BIN','/usr/bin/google-chrome-stable'));a.add_argument('--state',default='/tmp/gphotos-state');a.add_argument('--work',default='/tmp/gphotos-downloads');a.add_argument('--root',default='koofr_remote:/Google Photos/Photos');a.add_argument('--sroot',default='koofr_remote:/Google Photos/.gphotos-sync');a.add_argument('--seconds',type=int,default=int(os.environ.get('MAX_RUNTIME_SECONDS','16800')));a.add_argument('--maxitems',type=int,default=int(os.environ.get('MAX_ITEMS','1000')));x=a.parse_args();e=Engine(x)
- try:r=e.daily() if x.mode=='daily' else e.reconcile();print('SUMMARY='+json.dumps(r,ensure_ascii=False));return 1 if x.mode=='daily' and r.get('errors',0)>0 else 0
+ try:r=e.daily() if x.mode=='daily' else e.reconcile();print('SUMMARY='+json.dumps(r,ensure_ascii=False));return 1 if x.mode=='daily' and (r.get('errors',0)>0 or r.get('scan_status')!='BOUNDARY_REACHED') else 0
  finally:
   try:e.flush()
   except Exception as z:print('FINAL_STATE_FLUSH_ERROR='+str(z),file=sys.stderr)

@@ -1,6 +1,6 @@
 # Final Backfill aggregate publication — 22 October 2026
 
-A new publish-progress job runs after the existing Backfill health artifact. It
+The Backfill-completed workflow_run callback reads the existing final health artifact. It
 has no Koofr/Google secrets; only this job receives GitHub contents:write and
 reads the current run's health artifact. The engine retains contents:read.
 The publisher validates fixed repo/workflow/ref, original run identity and SHA,
@@ -19,9 +19,11 @@ Homepage's separate API reads this public aggregate and latest Backfill run
 metadata. It labels old snapshots during new runs. Existing Daily GAS unchanged.
 See Homepage-nas/docs/BACKFILL-PROGRESS-20261022.md for schema/limits.
 
-Current running 39698534252 retains its old checkout and cannot publish this
-new report. The next Backfill on new main runs the added publisher; until then
-live automated publication is unverified. No extra backup run is started.
+Current running 39698534252 keeps its original engine checkout. The separate
+main-branch callback can publish its final artifact once it ends, without
+changing or restarting that worker. Publication remains unverified until a real
+callback finishes. Only reviewed main code executes; artifacts are JSON data,
+not code. The callback verifies the source run is completed Backfill on main.
 
-Validation: 57 Python tests pass locally, including publisher allowlist,
+Validation: 60 Python tests pass locally, including publisher allowlist,
 missing summary, wrong workflow, stale update, identity conflict and replay.

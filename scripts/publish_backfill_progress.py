@@ -82,12 +82,15 @@ def publish(report):
 
 
 def main():
-    if os.environ.get('GITHUB_REPOSITORY')!=REPO or os.environ.get('GITHUB_WORKFLOW_REF')!=REPO+'/.github/workflows/backfill.yml@refs/heads/main':
+    if os.environ.get('GITHUB_REPOSITORY')!=REPO or os.environ.get('GITHUB_WORKFLOW_REF')!=REPO+'/.github/workflows/backfill-progress.yml@refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME')!='workflow_run':
         raise ValueError('WRONG_WORKFLOW')
-    run_id=os.environ['GITHUB_RUN_ID']
+    run_id=os.environ['ORIGINAL_RUN_ID']
     if not run_id.isdecimal():raise ValueError('INVALID_RUN')
     run=api('/actions/runs/'+run_id)
-    report=normalize(json.loads(Path('progress-data/daily-health.json').read_text()),run,os.environ['BACKFILL_RESULT'])
+    if run.get('id')!=int(run_id) or run.get('status')!='completed':raise ValueError('SOURCE_RUN_NOT_COMPLETED')
+    health=json.loads(Path('progress-data/daily-health.json').read_text())
+    if stamp(health['generated_at_utc'])>stamp(run['updated_at']):raise ValueError('INVALID_MEASUREMENT_TIME')
+    report=normalize(health,run,run['conclusion'])
     result=publish(report)
     print(json.dumps({'backfill_progress_published':result,'run_id':report['run_id']}))
 

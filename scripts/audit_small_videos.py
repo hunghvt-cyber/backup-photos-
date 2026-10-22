@@ -51,7 +51,7 @@ def select_targets(log):
     rows = re.findall(r'UPLOAD_OK id=(\S+) file=(.*?) size=(\d+) reused=(?:True|False)', log)
     targets = [(media, int(size)) for media, name, size in rows
                if name.lower().endswith('.mp4') and int(size) <= 4096]
-    if len(targets) != 2 or len({row[0] for row in targets}) != 2:
+    if not 1 <= len(targets) <= 10 or len({row[0] for row in targets}) != len(targets):
         raise RuntimeError('TARGET_SET_CHANGED')
     return targets
 

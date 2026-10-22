@@ -80,15 +80,43 @@ class WebBackup:
         for key in ('archive', 'library'):
             self.db.execute('INSERT OR IGNORE INTO web_tasks(kind,key) VALUES(?,?)', ('timeline', key))
         self.db.execute("INSERT OR IGNORE INTO web_tasks(kind,key) VALUES('albums','index')")
+        self.db.execute('CREATE TABLE IF NOT EXISTS web_inventory_meta(key TEXT PRIMARY KEY,value TEXT)')
         self.db.commit()
 
     def inventory(self, seconds):
+        self.inventory_pages = 0
+        self.inventory_flushes = 0
+        started = time.monotonic()
+        try:
+            return self._inventory(seconds)
+        finally:
+            print('INVENTORY_PERF=' + json.dumps({'pages': self.inventory_pages,
+                  'remote_checkpoints': self.inventory_flushes,
+                  'seconds': round(time.monotonic() - started, 3)}), flush=True)
+
+    def _inventory(self, seconds):
         until = time.monotonic() + seconds
         failed_tasks = set()
-        # Repeat complete inventories on later runs; partial traversals resume exactly.
+        args = getattr(self.e, 'a', None)
+        refresh = getattr(args, 'inventory_refresh_seconds', 0)
+        batch = getattr(args, 'inventory_checkpoint_pages', 1)
+        # Only defer a completed, recently timestamped pass while media remain.
+        # Partial traversals ALWAYS resume, including after a failed checkpoint.
         if not self.db.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone():
+            stamp = self.db.execute("SELECT value FROM web_inventory_meta WHERE key='completed_at'").fetchone()
+            try:
+                age = time.time() - float(stamp[0]) if stamp else None
+            except (ValueError, TypeError):
+                age = None
+            backlog = self.db.execute("SELECT 1 FROM media WHERE status!='uploaded' LIMIT 1").fetchone()
+            if refresh and age is not None and 0 <= age < refresh and backlog:
+                print('INVENTORY_DEFERRED recent_complete_with_backlog=True', flush=True)
+                return
+
             self.db.execute('UPDATE web_tasks SET page=NULL,done=0')
             self.db.commit()
+        pending_pages = 0
+        last_flush = time.monotonic()
         while time.monotonic() < until and self.e.left() > 300:
             tasks = self.db.execute("SELECT kind,key,page FROM web_tasks WHERE done=0 ORDER BY turn,CASE kind WHEN 'timeline' THEN 0 WHEN 'albums' THEN 1 ELSE 2 END,key").fetchall()
             task = next((t for t in tasks if t[:2] not in failed_tasks), None)
@@ -110,6 +138,9 @@ class WebBackup:
                 self.db.execute('UPDATE web_tasks SET turn=(SELECT COALESCE(MAX(turn),0)+1 FROM web_tasks) WHERE kind=? AND key=?', (kind, key))
                 self.db.commit()
                 self.e.flush()
+                self.inventory_flushes += 1
+                pending_pages = 0
+                last_flush = time.monotonic()
                 print('WEB_SOURCE_ERROR source=' + kind + ' type=' + type(exc).__name__, flush=True)
                 continue
             if not hasattr(result, 'items') or not hasattr(result, 'next_page_id'):
@@ -132,8 +163,23 @@ class WebBackup:
             self.db.execute('UPDATE web_tasks SET page=?,done=?,turn=(SELECT COALESCE(MAX(turn),0)+1 FROM web_tasks) WHERE kind=? AND key=?', (token, int(not token), kind, key))
             self.db.commit()
             self.e.stats['discovered'] += len(result.items) if kind != 'albums' else 0
-            self.e.flush()
+            pending_pages += 1
+            self.inventory_pages += 1
+            if pending_pages >= batch or time.monotonic() - last_flush >= 60:
+                self.e.flush()
+                self.inventory_flushes += 1
+                pending_pages = 0
+                last_flush = time.monotonic()
             print('WEB_PAGE=' + json.dumps({'source': kind if kind != 'timeline' else key, 'items': len(result.items), 'more': bool(token)}), flush=True)
+
+        if not failed_tasks and not self.db.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone():
+            self.db.execute("INSERT OR REPLACE INTO web_inventory_meta VALUES('completed_at',?)", (str(time.time()),))
+            self.db.commit()
+            # Timestamp and final cursors travel in the same SQLite snapshot.
+            pending_pages = max(pending_pages, 1)
+        if pending_pages:
+            self.e.flush()
+            self.inventory_flushes += 1
 
     def download(self, unused, url, media_id):
         try:
@@ -248,7 +294,11 @@ def main():
     parser.add_argument('--maxitems', type=int, default=int(os.environ.get('MAX_ITEMS', '10000')))
     parser.add_argument('--seconds', type=int, default=int(os.environ.get('MAX_RUNTIME_SECONDS', '18000')))
     parser.add_argument('--scan-seconds', type=int, default=1200)
+    parser.add_argument('--inventory-refresh-seconds', type=int, default=0)
+    parser.add_argument('--inventory-checkpoint-pages', type=int, default=1)
     a = parser.parse_args()
+    if not 0 <= a.inventory_refresh_seconds <= 86400 or not 1 <= a.inventory_checkpoint_pages <= 10:
+        parser.error('inventory refresh must be 0..86400 seconds; checkpoint batch must be 1..10 pages')
     a.profile = os.path.expanduser('~/gphotos-profile')
     a.chrome = os.environ.get('CHROME_BIN', '/usr/bin/google-chrome-stable')
     a.state, a.work = '/tmp/gphotos-state', '/tmp/gphotos-downloads'

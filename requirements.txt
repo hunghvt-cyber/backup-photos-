@@ -1,3 +1,0 @@
-playwright==1.55.0
-Pillow==11.3.0
-gpwc @ git+https://github.com/xob0t/google_photos_web_client.git@651aa268d50529cb6128c8a42c9cd4ce668f2189

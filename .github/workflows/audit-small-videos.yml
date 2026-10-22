@@ -1,0 +1,49 @@
+name: Read-only small video audit
+on:
+  push:
+    branches: [audit/photos-small-video-20261022]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install read-only inspection tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone ffmpeg
+          python3 -m pip install -q -r requirements.txt
+          echo "CHROME_BIN=$(command -v google-chrome-stable || command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: Configure temporary connection and restore profile copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
+          python3 - <<'PY'
+          import os,subprocess
+          from pathlib import Path
+          value=subprocess.run(['rclone','obscure',os.environ['KOOFR_APP_PASSWORD']],check=True,capture_output=True,text=True).stdout.strip()
+          p=Path.home()/'.config/rclone/rclone.conf'
+          p.write_text('[koofr_remote]\ntype = webdav\nurl = https://app.koofr.net/dav/Koofr\nvendor = other\nuser = '+os.environ['KOOFR_USER']+'\npass = '+value+'\n')
+          p.chmod(0o600)
+          PY
+          rclone copyto 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' "$RUNNER_TEMP/profile.enc" --timeout 30s
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$RUNNER_TEMP/profile.enc" -out "$RUNNER_TEMP/profile.tgz" -pass env:GPHOTOS_PROFILE_KEY
+          tar -C "$HOME" -xzf "$RUNNER_TEMP/profile.tgz"
+          rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+      - name: Inspect two exact small MP4 targets without changing remote state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m scripts.audit_small_videos
+      - name: Remove runner-local credentials and copied media
+        if: always()
+        run: |
+          rm -rf "$HOME/gphotos-profile" "$HOME/.config/rclone"
+          rm -f "$RUNNER_TEMP/profile.enc" "$RUNNER_TEMP/profile.tgz"

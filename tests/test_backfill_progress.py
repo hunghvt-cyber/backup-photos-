@@ -29,4 +29,30 @@ class ProgressTests(unittest.TestCase):
         self.health['attempted']=1
         with self.assertRaises(ValueError):normalize(self.health,self.run,'failure')
 
+class CallbackTests(unittest.TestCase):
+    setUp=ProgressTests.setUp
+    def env(self):
+        return dict(GITHUB_REPOSITORY='hunghvt-cyber/google-photos-koofr',GITHUB_WORKFLOW_REF='hunghvt-cyber/google-photos-koofr/.github/workflows/backfill-progress.yml@refs/heads/main',GITHUB_EVENT_NAME='workflow_run',ORIGINAL_RUN_ID='100',GITHUB_RUN_ID='999')
+    def test_callback_uses_completed_source_identity_not_its_own_run(self):
+        import json
+        from unittest.mock import patch
+        from scripts.publish_backfill_progress import main
+        run={**self.run,'status':'completed','conclusion':'failure','updated_at':'2026-10-20T05:01:00Z'}
+        with patch.dict('os.environ',self.env(),clear=True),patch('scripts.publish_backfill_progress.api',return_value=run) as api,patch('pathlib.Path.read_text',return_value=json.dumps(self.health)),patch('scripts.publish_backfill_progress.publish',return_value=True) as publish:
+            main()
+        api.assert_called_once_with('/actions/runs/100')
+        self.assertEqual(publish.call_args.args[0]['run_id'],100)
+    def test_in_progress_source_is_refused(self):
+        from unittest.mock import patch
+        from scripts.publish_backfill_progress import main
+        with patch.dict('os.environ',self.env(),clear=True),patch('scripts.publish_backfill_progress.api',return_value={**self.run,'status':'in_progress'}),patch('scripts.publish_backfill_progress.publish') as publish:
+            with self.assertRaisesRegex(ValueError,'SOURCE_RUN_NOT_COMPLETED'):main()
+        publish.assert_not_called()
+    def test_untrusted_callback_context_is_refused_before_any_api(self):
+        from unittest.mock import patch
+        from scripts.publish_backfill_progress import main
+        with patch.dict('os.environ',{**self.env(),'GITHUB_EVENT_NAME':'pull_request'},clear=True),patch('scripts.publish_backfill_progress.api') as api:
+            with self.assertRaisesRegex(ValueError,'WRONG_WORKFLOW'):main()
+        api.assert_not_called()
+
 if __name__=='__main__':unittest.main()

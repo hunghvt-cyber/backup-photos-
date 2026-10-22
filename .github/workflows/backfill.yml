@@ -157,25 +157,3 @@ jobs:
           path: ${{ runner.temp }}/daily-health.json
           if-no-files-found: warn
           retention-days: 7
-
-  publish-progress:
-    needs: backfill
-    if: always() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-backup-health-${{ github.run_id }}
-          path: progress-data
-      - name: Publish filtered Backfill progress to report branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BACKFILL_RESULT: ${{ needs.backfill.result }}
-        run: python3 scripts/publish_backfill_progress.py

@@ -1,0 +1,32 @@
+name: Publish completed Backfill progress
+on:
+  workflow_run:
+    workflows: ['Google Photos Historical Backfill']
+    branches: [main]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  publish-progress:
+    if: github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-backup-health-${{ github.event.workflow_run.id }}
+          path: progress-data
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Publish filtered progress for the verified completed source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORIGINAL_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 scripts/publish_backfill_progress.py

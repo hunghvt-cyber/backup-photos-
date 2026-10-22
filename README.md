@@ -1,3 +1,5 @@
+> 22/10: [video gốc và nhận diện nội dung](docs/VIDEO-ORIGINAL-IDENTITY-20261022.md). Ba MP4 nhỏ thực chất là WebP preview; không đổi tên thành ảnh. Bản sửa lấy đúng Download và xác minh trước khi lưu thành công.
+
 > Cập nhật 21/10: [download verification và Daily scan](docs/DOWNLOAD-VERIFICATION-20261021.md). Không dùng bootstrap_complete để kết luận đủ thư viện.
 
 > Current state: [20 October upgrade handoff](docs/UPGRADE-20261020.md) and [AI_CONTEXT.md](AI_CONTEXT.md).

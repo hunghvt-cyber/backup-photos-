@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           test -n "$KOOFR_USER" && test -n "$KOOFR_APP_PASSWORD" && test -n "$GPHOTOS_PROFILE_KEY"
           for attempt in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y rclone; then break; fi
+            if sudo apt-get update -qq && sudo apt-get install -y rclone ffmpeg; then break; fi
             sleep 15
           done
           command -v rclone >/dev/null

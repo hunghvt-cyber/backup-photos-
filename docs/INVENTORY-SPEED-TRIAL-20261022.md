@@ -1,10 +1,13 @@
-# Thử tối ưu kiểm kê — 22/10/2026
+# Tối ưu kiểm kê Backfill — 22/10/2026
 
 ## Phạm vi
 
-Nhánh thử; chưa bật production. Hai cờ mới mặc định tắt: refresh=0 và
-checkpoint=1. Lịch, thời gian chạy, đường tải original, collision/hash, upload,
-remote-size verification và checkpoint mỗi 10 media đều giữ nguyên.
+Chủ hệ thống đã cho phép áp dụng vào lịch Backfill hiện hữu ngày 22/10/2026.
+Workflow Backfill luôn truyền refresh=86400 và checkpoint=10; không còn bước
+chạy riêng hoặc input chọn thử nghiệm. Mặc định CLI vẫn refresh=0/checkpoint=1,
+nên Daily không đổi. Lịch Backfill 04:45 Việt Nam mỗi ngày, ngân sách engine 5 giờ,
+đường tải original, collision/hash, upload, remote-size verification và checkpoint
+mỗi 10 media đều giữ nguyên. Chỉ merge source, không khởi chạy lượt mới.
 
 1. Chỉ hoãn quét lại nếu tất cả nguồn đã duyệt xong, có timestamp hoàn tất hợp lệ
    dưới 24 giờ, và manifest vẫn có mục chưa uploaded. Luôn tiếp tục nguồn đang dở.
@@ -31,18 +34,18 @@ cuối ghi timestamp. Final web_items và cursor giống hệt. Mỗi flush hi�
 2 file state nên tương ứng 202 → 22 thao tác copyto state trong fixture.
 Không suy ra tăng tốc upload 89%, không đo băng thông hoặc thời gian Google/Koofr.
 
-## Chạy thử thực tế
+## Vận hành theo lịch cũ
 
-Backfill workflow có input `inventory_speed_trial`, boolean mặc định false, chỉ
-bật tay cho một lượt. Schedule vẫn dùng baseline. Với thử ngắn, max_items=20.
-Worker dùng concurrency group hiện có; không chạy writer độc lập hoặc reset state.
-Lượt thử thật vẫn backup media vào kho hiện hành và lưu manifest/profile như một
-lượt backup bình thường; không tạo bản sao độc lập, không sửa/xóa file cũ.
+Áp dụng tự động từ lượt Backfill kế tiếp sau merge. Không có workflow mới,
+nhắc hẹn hoặc yêu cầu chạy tay. Không thay max_items; vẫn là 10000 và chịu ngân
+sách thời gian cũ. Worker dùng concurrency group hiện có; không chạy writer độc
+lập, không reset state hoặc thay đối tượng profile. Các thao tác upload thật vẫn
+đi qua xác minh và manifest hiện hành.
 
 Cờ runtime tương đương:
 
 ```sh
-python3 -m src.gphotos_web_backup --scan-seconds 600 --maxitems 20 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10
+python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10
 ```
 
 Chỉ chạy trong môi trường workflow có config và phiên đã khôi phục. Không chạy
@@ -50,7 +53,7 @@ lệnh này từ checkout thiếu config. Không in cookies hoặc đưa credent
 `INVENTORY_PERF` ghi pages, remote_checkpoints, seconds. `INVENTORY_DEFERRED` nói
 rõ có hoãn quét vì vòng gần đây hoàn tất và còn backlog. WEB_SUMMARY giữ schema cũ.
 
-Chưa có lượt thử live hoặc benchmark Google/Koofr. Không cộng các file khác nhau
+Tại thời điểm chuẩn bị bản phát hành, chưa có kết quả lượt chạy live dùng bản tối ưu hoặc benchmark Google/Koofr. Không cộng các file khác nhau
 rồi coi là A/B về tốc độ. Khi áp dụng, so cùng dữ liệu thử riêng hoặc nhiều lượt
 có phân bố ảnh/video tương đương; đo GB/h và errors, không chỉ mục/h. Khả năng
 hoãn quét có thể ít tác dụng nếu Daily đã mở một vòng kiểm kê mới còn dở trước

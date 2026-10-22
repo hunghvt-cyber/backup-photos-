@@ -7,11 +7,6 @@ on:
         description: "Maximum historical images/videos to attempt (subject to time budget)"
         required: false
         default: "10000"
-      inventory_speed_trial:
-        description: "Opt-in: defer recent completed inventory (24h), checkpoint each 10 pages/60s"
-        type: boolean
-        required: false
-        default: false
   schedule:
     # Every day 04:45 Vietnam. Serialized with Daily and Reconcile.
     - cron: "45 21 * * *"
@@ -32,7 +27,6 @@ jobs:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      INVENTORY_SPEED_TRIAL: ${{ inputs.inventory_speed_trial && '1' || '0' }}
       MAX_RUNTIME_SECONDS: "18000"
       MAX_ITEMS: ${{ inputs.max_items || '10000' }}
     steps:
@@ -86,12 +80,8 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          extra_args=()
-          if [ "$INVENTORY_SPEED_TRIAL" = "1" ]; then
-            extra_args+=(--inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10)
-          fi
           timeout --signal=INT --kill-after=30s 18300s \
-            python3 -m src.gphotos_web_backup --scan-seconds 600 "${extra_args[@]}" 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+            python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash

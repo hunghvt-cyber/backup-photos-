@@ -2,6 +2,14 @@
 
 Đọc [README](../README.md) và [lịch/ngân sách hiện hành](FREE_TIER_BUDGET.md); hướng dẫn download mới ở [VIDEO-ORIGINAL-IDENTITY](VIDEO-ORIGINAL-IDENTITY-20261022.md).
 
+## Tối ưu Backfill theo lịch — 22/10/2026
+
+Chủ hệ thống yêu cầu bật [tối ưu kiểm kê](INVENTORY-SPEED-TRIAL-20261022.md)
+trên nhánh chính cho lịch Backfill 04:45 Việt Nam hằng ngày: checkpoint mỗi
+10 trang/60 giây và TTL 24 giờ cho vòng kiểm kê hoàn tất khi còn backlog.
+Không chạy riêng, không đổi giờ/ngân sách, không nới xác minh media. Daily giữ
+cấu hình cũ. Chỉ xác nhận hiệu quả thực tế sau kết quả lượt lịch tiếp theo.
+
 ## Normal operation
 
 No computer is required for normal use.

@@ -19,7 +19,7 @@ ROOT = 'koofr_remote:/Google Photos/'
 def command(*args):
     result = subprocess.run(args, capture_output=True, timeout=180)
     if result.returncode:
-        raise RuntimeError('READ_COMMAND_FAILED')
+        raise RuntimeError('READ_COMMAND_FAILED_' + args[1].upper())
     return result.stdout
 
 
@@ -153,5 +153,6 @@ if __name__ == '__main__':
         main()
     except Exception as exc:
         # Do not print provider messages, paths, URLs, cookies or media IDs.
-        print('MEDIA_AUDIT_FAILED type=' + type(exc).__name__)
+        code = str(exc) if isinstance(exc, RuntimeError) and re.fullmatch('[A-Z_]+', str(exc)) else type(exc).__name__
+        print('MEDIA_AUDIT_FAILED code=' + code)
         raise SystemExit(1)

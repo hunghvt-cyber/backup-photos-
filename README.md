@@ -89,15 +89,16 @@ The runner is disposable. Each run restores `manifest.sqlite` and checkpoints fr
 
 If manifest state is missing but a candidate Koofr object already exists, production compares size and SHA-256 and can reconstruct the manifest instead of creating a duplicate.
 
-## Homepage backup report (GAS/Drive hoặc Blob)
+## Báo cáo Homepage qua GAS/Drive
 
-Workflow tạo JSON tóm tắt đã lọc từ kết quả hiện có; việc phát báo cáo là best-effort, không thay kết quả backup và không thay dữ liệu/state.
+Chỉ xuất aggregate đã lọc; không coi publish thành công là backup media thành công.
 
-- Actions variable `REPORT_BACKEND=gas-drive`: dùng variable `REPORT_GAS_URL` và secret `REPORT_GAS_KEY`; chạy `scripts/publish_gas_report.py`.
-- Khi `REPORT_BACKEND` chưa đặt, source workflow hiện mặc định `blob`; nhánh này dùng `BLOB_READ_WRITE_TOKEN` và `scripts/publish_blob_report.py`. Không có key thì bỏ qua với notice. Đây là lựa chọn tương thích, không chứng minh Homepage đang đọc Blob.
-- Homepage hiện chọn API GAS/Drive. Ngày 19/10/2026, hai feed `source=gdrive|gphotos` trả **503 NO_REPORT** trong lượt kiểm kê. Cần xác minh variable, metadata key, lần publish và GAS HEAD/ack trước khi coi chuyển feed hoàn tất. Thiếu feed không đồng nghĩa backup media thất bại.
-- Không đưa raw logs, tên file, cookie hoặc credentials vào báo cáo. Không đổi lịch, filter, reset/resync hoặc token để sửa câu chữ tài liệu.
+- Source workflow mặc định `REPORT_BACKEND=gas-drive`; dùng variable
+  `REPORT_GAS_URL` và secret `REPORT_GAS_KEY`. Nhánh Blob chỉ còn lựa chọn legacy
+  rõ ràng, không phải mặc định hoặc fallback của Homepage.
+- Hai feed đã phục hồi HTTP 200 ngày 20/10; đây là bằng chứng có thời điểm,
+  chưa phải phép đo mới ngày 22/10. Xem [hồ sơ vận hành](docs/REPORTS-GAS.md).
+- Không sửa engine, filter, state, lịch, reset/resync hoặc media để sửa báo cáo.
 
-Nguồn hiện hành: [Homepage OPERATIONS](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/OPERATIONS.md).
-Hồ sơ schema/lịch sử: [BACKUP-REPORTING.md](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/BACKUP-REPORTING.md).
-Bản đồ quản trị: [0219nas-aio/SYSTEMS-20261019.md](https://github.com/hunghvt-cyber/0219nas-aio/blob/main/SYSTEMS-20261019.md).
+Nguồn tích hợp/API: [Homepage OPERATIONS](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/OPERATIONS.md).
+Bản đồ tổng thể: [NAS AIO](https://github.com/hunghvt-cyber/0219nas-aio).

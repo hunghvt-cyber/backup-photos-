@@ -1,3 +1,30 @@
+# Lịch và ngân sách Actions — Drive/Photos
+
+Nguồn quản trị chung duy nhất cho hai repo. Đối chiếu workflow main ngày
+22/10/2026; cả hai repo public tại lần đọc metadata. Bảng là cấu hình source,
+không phải xác nhận scheduler đã chạy đúng giờ hoặc dung lượng backup đầy đủ.
+
+| Job | Cron UTC | Giờ Việt Nam | Giới hạn job / engine |
+| --- | --- | --- | --- |
+| Drive Bisync | `0 19 * * *` | 02:00 hằng ngày | 35 phút / rclone 29 phút |
+| Photos Daily | `17 20 * * *` | 03:17 hằng ngày | 40 phút / 1.500 giây; watchdog 1.800 giây |
+| Photos Backfill | `45 21 * * *` | 04:45 hằng ngày | 330 phút / 18.000 giây; watchdog 18.300 giây |
+| Photos Reconcile | `41 19 1 1,4,7,10 *` | 02:41 ngày 2 tháng 1/4/7/10 | 60 phút / 2.400 giây; watchdog 2.700 giây |
+
+Nguồn thực thi: [Drive bisync](https://github.com/hunghvt-cyber/my-backup-gdrive-koofr/blob/main/.github/workflows/bisync.yml),
+[Daily](../.github/workflows/daily.yml), [Backfill](../.github/workflows/backfill.yml),
+[Reconcile](../.github/workflows/reconcile.yml). Schedule có thể trễ; ba job media Photos
+dùng chung concurrency. Giữ thời gian dự phòng lưu manifest/profile/state.
+Drive extended_budget là lựa chọn thủ công 330 phút/job và 300 phút rclone,
+không tự bật và không đồng nghĩa được phép reset/resync.
+
+Kế hoạch 1.784 phút/tháng dưới đây thuộc thời kỳ private ngày 15/10 và **không
+còn mô tả lịch đang cấu hình**. Không hứa chạy public là miễn phí vô hạn hoặc phù
+hợp mọi cách dùng; quota/billing và điều kiện tài khoản phải kiểm riêng trước đổi nơi chạy.
+Không đổi visibility, budget hoặc workflow để sửa tài liệu.
+
+## Kế hoạch private 15/10/2026 — lưu lịch sử, đã được thay thế
+
 > Current public-runner policy and web backup upgrade: see [AI_CONTEXT.md](../AI_CONTEXT.md). Older budget and grid-scanner notes below are historical.
 
 # Shared GitHub Actions free-tier operating budget

@@ -1,29 +1,32 @@
-# GAS report transport (opt-in)
+# Báo cáo Photos Daily qua GAS/Drive
 
-Only the final sanitized gphotos aggregate report transport changes. The backup/sync
-engine, schedule, credentials, rclone state and media paths stay unchanged.
+Đối chiếu source workflow và hồ sơ phục hồi ngày 22/10/2026; không chạy backup,
+probe hoặc publish mới trong đợt cập nhật tài liệu.
 
-Default repository variable REPORT_BACKEND is blob. To opt in after Google and
-end-to-end tests pass, set REPORT_BACKEND=gas-drive, repository variable
-REPORT_GAS_URL to the existing reporting /exec URL, and repository secret
-REPORT_GAS_KEY to its dedicated BACKUP_GPHOTOS_KEY value. Never put the key in
-chat, files, logs or workflow inputs. Keep BLOB_READ_WRITE_TOKEN for rollback.
+## Cấu hình và ranh giới
 
-scripts/publish_gas_report.py is stdlib-only and is copied unchanged from
-Homepage-nas/reporting/publish_backup_report.py. No Blob SDK is installed in the
-GAS path. It validates the fixed repository and workflow, sanitized fields,
-run_number/run_attempt/run_id, signs requests, validates signed ack and retries
-at most three times with the same mutation identity. Old/conflicting terminal
-reports are refused, not overwritten. run_number ordering is scoped to the
-approved workflow; do not call this publisher from backfill/reconcile.
+- Workflow mặc định `REPORT_BACKEND=gas-drive`; variable `REPORT_GAS_URL`,
+  secret `REPORT_GAS_KEY` riêng cho source `gphotos`.
+- `scripts/publish_gas_report.py` ký HMAC, xác minh signed ACK, giữ nguyên
+  run ID/number/attempt và mutation identity khi retry. Không reset HEAD/sequence.
+- Backend GAS reporting khác GAS chi tiêu/Gemini và GAS webhook bot.
+- Blob là đường legacy chọn tường minh; không tự fallback, không phải backend
+  Homepage đang chọn. Không cấp lại key hay chuyển về Blob theo tài liệu cũ.
+- Publish lỗi được tách khỏi kết quả engine; badge xanh không chứng minh báo cáo
+  đã đến nơi hoặc toàn bộ dữ liệu đã backup. Không có raw log/tên file/token trong feed.
+- Feed Daily không nhận Backfill/Reconcile. Backfill dùng [nhánh aggregate riêng](BACKFILL-PROGRESS-20261022.md).
 
-Existing reporting continue-on-error and engine outcome conditions remain.
-Moving the report does not fix private GitHub Actions billing/runner limits.
-This branch has not published a real report to Google or changed production.
+## Bằng chứng và kiểm tra
 
-Local test: python3 -m unittest discover -s tests -p 'test_report_gas.py'
+Ngày 20/10 đã xác minh signed ACK và hai API HTTP 200 bằng báo cáo thật có
+run ID/thời gian gốc; không chạy lại engine để phục hồi feed.
+[Bằng chứng đầy đủ, gồm các lỗi đã khắc phục](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/results/backup-report-recovery-20261020.md).
+Không coi lỗi NO_REPORT hoặc thiếu handler GAS v12 trong hồ sơ cũ là trạng thái mới.
 
-Complete architecture/Google deployment and Homepage cutover gates live in
-Homepage-nas/docs/BACKUP-REPORTS-GAS-20261018.md. Current Google v12 does not yet
-contain these backup handlers. Do not select GAS until the matching backend
-is deployed, isolated synthetic qualification passes, and this workflow can run.
+Kiểm tra fixture: `python3 -m unittest discover -s tests -p 'test_report*.py'`.
+Đọc workflow và bộ test hiện có trước khi chạy; fixture không chứng minh media backup.
+
+Hợp đồng/API và vận hành chung thuộc
+[Homepage OPERATIONS](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/OPERATIONS.md);
+thiết kế ban đầu ở [BACKUP-REPORTS-GAS-20261018](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/BACKUP-REPORTS-GAS-20261018.md).
+Không sửa config, secret, lịch hoặc dữ liệu trong một đợt tài liệu.

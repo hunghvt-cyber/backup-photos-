@@ -1,3 +1,17 @@
+> Cửa vào hiện hành 22/10/2026: đọc [README](README.md), [lịch/ngân sách](docs/FREE_TIER_BUDGET.md)
+> và [OPERATIONS](docs/OPERATIONS.md). Phần dài bên dưới là nhật ký theo thời điểm.
+> Worker Daily/Backfill: `src/gphotos_web_backup.py`; Reconcile xem workflow riêng.
+> Không dùng bootstrap_complete hoặc số 21 media cũ để khẳng định đủ thư viện.
+> Lượt 39386977931 đã kết thúc PARTIAL/failure theo
+> [đánh giá](https://github.com/hunghvt-cyber/0219nas-aio/blob/main/BACKUP-EXECUTION-ASSESSMENT-20261020.md);
+> nhãn đang chạy trong snapshot 20/10 phía dưới đã hết hiệu lực.
+> Báo cáo Daily mặc định GAS/Drive; [bằng chứng phục hồi 20/10](https://github.com/hunghvt-cyber/Homepage-nas/blob/main/docs/results/backup-report-recovery-20261020.md).
+> Backfill có feed GitHub riêng. Không cấp lại Blob theo hồ sơ 14/10.
+> Phân biệt tải file hợp lệ, đúng media/original và đủ thư viện; xem
+> [xác minh download](docs/DOWNLOAD-VERIFICATION-20261021.md) và
+> [nhận diện video gốc](docs/VIDEO-ORIGINAL-IDENTITY-20261022.md).
+> Không tái chạy canary, refresh profile hoặc sửa media/state khi chỉ đọc tài liệu.
+
 > Backfill progress 22/10: [nhánh báo cáo riêng cho Homepage](docs/BACKFILL-PROGRESS-20261022.md). Daily vẫn qua GAS; Backfill chỉ xuất aggregate sau khi chốt lượt, không gửi giả Daily.
 
 > 22/10: [video gốc và nhận diện nội dung](docs/VIDEO-ORIGINAL-IDENTITY-20261022.md). Ba MP4 nhỏ thực chất là WebP preview; không đổi tên thành ảnh. Bản sửa lấy đúng Download và xác minh trước khi lưu thành công.

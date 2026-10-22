@@ -1,5 +1,7 @@
 # Operations
 
+Đọc [README](../README.md) và [lịch/ngân sách hiện hành](FREE_TIER_BUDGET.md); hướng dẫn download mới ở [VIDEO-ORIGINAL-IDENTITY](VIDEO-ORIGINAL-IDENTITY-20261022.md).
+
 ## Normal operation
 
 No computer is required for normal use.
@@ -8,7 +10,7 @@ No computer is required for normal use.
 - Quarterly reconcile uses the simple UTC cron `41 19 1 1,4,7,10 *`: 19:41 UTC on day 1, equivalent to 02:41 Asia/Ho_Chi_Minh on day 2 of January, April, July and October.
 - The repository and GitHub Actions logs can be inspected from a phone or iPad.
 - Persistent state and the encrypted Google session profile live on Koofr.
-- Initial historical bootstrap is complete; normal daily runs now operate from the newest checkpoint.
+- Daily/Backfill dùng worker web hiện hành; inventory toàn thư viện chưa được chứng minh. Không dùng bootstrap_complete cũ làm chứng nhận hoàn tất.
 - For AI-assisted maintenance, read `AI_CONTEXT.md` before changing production.
 
 ## When manual intervention is required
@@ -36,5 +38,5 @@ If Google explicitly requires login again, recreate the interactive profile in C
 - If manifest state is missing but an existing Koofr candidate matches size and SHA-256, the existing object is reused and manifest state is reconstructed.
 - Failed media remain retryable.
 - A daily run with media errors exits red after state is safely flushed.
-- Daily and reconcile jobs cannot run concurrently.
+- Daily, Backfill and Reconcile media jobs share one concurrency group.
 - Reconcile is report-only and cannot delete files.

@@ -1,3 +1,8 @@
+> Tài liệu thiết kế/lịch sử. Khi vận hành, ưu tiên [README](../README.md),
+> [lịch hiện hành](FREE_TIER_BUDGET.md), [nâng cấp worker](UPGRADE-20261020.md)
+> và [xác minh original](VIDEO-ORIGINAL-IDENTITY-20261022.md).
+> Các mô tả grid scanner, bootstrap đã đủ hoặc ngân sách cũ dưới đây không thay thế source hiện hành.
+
 # Architecture
 
 ## Data path

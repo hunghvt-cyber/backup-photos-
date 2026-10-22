@@ -120,21 +120,18 @@ class VerificationTests(unittest.TestCase):
             self.assertEqual(report['scan_status'], 'BOUNDARY_REACHED')
             self.assertEqual(self.e.cp['newest_id'], 'new' if errors == 0 else 'boundary')
 
-    def test_browser_403_fallback_uses_completed_browser_download(self):
-        import urllib.error
+    def test_browser_download_uses_exact_event_never_preview_request(self):
         context = MagicMock()
         page = MagicMock()
         context.pages = [page]
-        request = NS(url='https://lh3.googleusercontent.com/media', all_headers=lambda: {})
-        download = NS(suggested_filename='photo.jpg', save_as=lambda dest: Path(dest).write_bytes(b'original'))
-        page.expect_request.return_value.__enter__.return_value.value = request
+        download = NS(suggested_filename='photo.jpg', save_as=lambda dest: Path(dest).write_bytes(b'\xff\xd8\xfforiginal'))
         page.expect_download.return_value.__enter__.return_value.value = download
         pw = NS(chromium=NS(launch_persistent_context=MagicMock(return_value=context)))
         self.e.a.profile = 'unused'; self.e.a.chrome = 'unused'
-        with patch('src.gphotos_sync.urllib.request.urlopen', side_effect=urllib.error.HTTPError(request.url, 403, 'Forbidden', {}, None)):
-            path, name = self.e.download(pw, 'https://photos.google.com/photo/media', 'media')
-        self.assertEqual(path.read_bytes(), b'original')
+        path, name = self.e.download(pw, 'https://photos.google.com/photo/media', 'media')
+        self.assertEqual(path.read_bytes(), b'\xff\xd8\xfforiginal')
         self.assertEqual(name, 'photo.jpg')
+        page.expect_request.assert_not_called()
         context.close.assert_called_once()
 
     def test_scan_collects_intermediate_viewports_before_closing_profile(self):

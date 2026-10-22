@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time, urllib.request, urllib.error
+import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -25,6 +25,37 @@ def sha(p):
   for b in iter(lambda:f.read(1048576),b''):h.update(b)
  return h.hexdigest()
 
+VIDEO_EXTENSIONS={'.mp4','.mov','.m4v','.webm','.mkv','.avi','.3gp','.3g2','.mts','.m2ts','.mpg','.mpeg'}
+def image_payload(prefix):
+ return (prefix.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'GIF87a',b'GIF89a'))
+         or (prefix[:4]==b'RIFF' and prefix[8:12]==b'WEBP'))
+def validate_media(path,filename,expected_type=None):
+ """Recognize actual payload; never rename a preview as an original video."""
+ path=Path(path)
+ if not path.stat().st_size:raise RuntimeError('EMPTY_MEDIA_DOWNLOAD')
+ with path.open('rb') as stream:prefix=stream.read(512)
+ lower=prefix.lstrip().lower()
+ if lower.startswith((b'<!doctype html',b'<html')) or b'<html' in lower:
+  raise RuntimeError('HTML_INSTEAD_OF_MEDIA')
+ image=image_payload(prefix)
+ wants_video=expected_type=='video' or Path(filename).suffix.lower() in VIDEO_EXTENSIONS
+ if wants_video:
+  if image:raise RuntimeError('IMAGE_PREVIEW_INSTEAD_OF_VIDEO')
+  try:
+   probe=subprocess.run(['ffprobe','-v','error','-show_entries',
+    'format=format_name,duration:stream=codec_type,codec_name','-of','json',str(path)],
+    capture_output=True,text=True,timeout=30)
+   data=json.loads(probe.stdout)
+   format_name=data.get('format',{}).get('format_name','')
+   duration=float(data.get('format',{}).get('duration') or 0)
+  except (OSError,ValueError,subprocess.TimeoutExpired):
+   raise RuntimeError('VIDEO_VALIDATION_UNAVAILABLE') from None
+  if (probe.returncode or not any(x.get('codec_type')=='video' for x in data.get('streams',[]))
+      or any(x in format_name for x in ('image2','_pipe','gif')) or not duration>0):
+   raise RuntimeError('INVALID_OR_STILL_IMAGE_VIDEO')
+  return 'video'
+ return 'photo' if image else 'unclassified'
+
 class DB:
  def __init__(self,p):
   self.p=Path(p); self.p.parent.mkdir(parents=True,exist_ok=True); self.c=sqlite3.connect(p); self.c.execute('PRAGMA journal_mode=WAL'); self.c.executescript('''
@@ -34,7 +65,7 @@ class DB:
   n=now(); self.c.execute("INSERT INTO media(id,type,url,label,created,first_seen,last_seen,status) VALUES(?,?,?,?,?,?,?,'seen') ON CONFLICT(id) DO UPDATE SET url=excluded.url,label=COALESCE(excluded.label,media.label),created=COALESCE(excluded.created,media.created),last_seen=excluded.last_seen",(i,t,u,l,cr,n,n)); self.c.commit()
  def uploaded(self,i):
   r=self.c.execute("SELECT 1 FROM media WHERE id=? AND status='uploaded'",(i,)).fetchone(); return bool(r)
- def done(self,i,nm,sz,h,r): self.c.execute("UPDATE media SET filename=?,size=?,sha256=?,remote=?,uploaded_at=?,last_seen=?,status='uploaded',last_error=NULL WHERE id=?",(nm,sz,h,r,now(),now(),i)); self.c.commit()
+ def done(self,i,nm,sz,h,r,media_type=None): self.c.execute("UPDATE media SET filename=?,size=?,sha256=?,remote=?,uploaded_at=?,last_seen=?,type=COALESCE(?,type),status='uploaded',last_error=NULL WHERE id=?",(nm,sz,h,r,now(),now(),media_type,i)); self.c.commit()
  def err(self,i,e): self.c.execute("UPDATE media SET last_error=?,status=CASE WHEN status='uploaded' THEN status ELSE 'error' END WHERE id=?",(str(e)[:800],i)); self.c.commit()
  def seen(self,g,i): self.c.execute("INSERT OR REPLACE INTO reconcile_seen VALUES(?,?,?)",(g,i,now())); self.c.commit()
  def snapshot(self,p):
@@ -47,6 +78,28 @@ class DB:
 class Engine:
  def __init__(self,a):
   self.a=a; self.start=time.monotonic(); self.sd=Path(a.state); self.wd=Path(a.work); self.sd.mkdir(parents=True,exist_ok=True); self.wd.mkdir(parents=True,exist_ok=True); self.restore(); self.db=DB(self.sd/'manifest.sqlite'); self.cp=self.load('daily-checkpoint.json',{'version':1,'bootstrap_complete':False}); self.stats={'discovered':0,'attempted':0,'uploaded':0,'skipped':0,'errors':0}; self.seen=set()
+ def recheck_small_video_records(self):
+  # Run only inside the regular serialized worker, never in the read-only audit.
+  # Verify exact remote bytes against the recorded hash before changing a row.
+  rows=self.db.c.execute("SELECT id,filename,remote,size,sha256 FROM media WHERE status='uploaded' AND size>0 AND size<=4096 ORDER BY uploaded_at,id").fetchall()
+  candidates=[r for r in rows if Path(r[1] or '').suffix.lower() in VIDEO_EXTENSIONS][:20]
+  requeued=0
+  for media,name,remote,size,digest in candidates:
+   if self.left()<240:break
+   if not remote or not remote.startswith(self.a.root.rstrip('/')+'/'):continue
+   try:
+    result=subprocess.run(['rclone','cat',remote,'--head','4097','--retries','1',
+     '--low-level-retries','1','--contimeout','10s','--timeout','15s'],capture_output=True,timeout=45)
+    data=result.stdout
+    if result.returncode or len(data)!=size or hashlib.sha256(data).hexdigest()!=digest:
+     print('SMALL_VIDEO_RECHECK_UNCONFIRMED',flush=True);continue
+    if not image_payload(data):continue
+    self.db.c.execute("UPDATE media SET status='error',last_error='IMAGE_PREVIEW_INSTEAD_OF_VIDEO; original queued for retry' WHERE id=? AND status='uploaded' AND remote=? AND sha256=?",(media,remote,digest))
+    self.db.c.commit();requeued+=1
+   except (OSError,subprocess.TimeoutExpired):
+    print('SMALL_VIDEO_RECHECK_UNAVAILABLE',flush=True)
+  if requeued:self.flush()
+  if candidates:print('SMALL_VIDEO_RECHECK='+json.dumps({'checked_candidates':len(candidates),'requeued':requeued,'old_files_preserved':True}),flush=True)
  def load(self,n,d):
   p=self.sd/n
   try:return json.loads(p.read_text())
@@ -76,19 +129,18 @@ class Engine:
   c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,accept_downloads=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
   try:
    p.goto(u,wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(1500)
-   with p.expect_request(lambda r:'usercontent.google.com' in r.url,timeout=120000) as rq:
-    with p.expect_download(timeout=120000) as dl:p.keyboard.press('Shift+D')
-   r=rq.value;d=dl.value;hs={k:v for k,v in r.all_headers().items() if not k.startswith(':') and k.lower() not in ('host','content-length','if-none-match','if-modified-since','if-range','range')};hs['accept-encoding']='identity';nm=Path(d.suggested_filename).name;dst=self.wd/f'{i}__{nm}'
+   # The first googleusercontent request can be the viewer's WebP preview.
+   # Save the exact Download event from Google's Download action instead.
+   with p.expect_download(timeout=120000) as event:p.keyboard.press('Shift+D')
+   download=event.value;nm=Path(download.suggested_filename).name
+   if not nm or nm in ('.','..'):raise RuntimeError('INVALID_DOWNLOAD_FILENAME')
+   dst=self.wd/f'{i}__{nm}'
    try:
-    with urllib.request.urlopen(urllib.request.Request(r.url,headers=hs),timeout=180) as z,open(dst,'wb') as f:shutil.copyfileobj(z,f,1048576)
-   except urllib.error.HTTPError as exc:
-    if exc.code != 403:raise
-    # The browser already owns a download for this exact media. Use its bytes
-    # rather than repeatedly replaying a URL rejected outside Chrome.
+    download.save_as(str(dst))
+    validate_media(dst,nm)
+   except BaseException:
     dst.unlink(missing_ok=True)
-    print('BROWSER_DOWNLOAD_FALLBACK reason=HTTP_403',flush=True)
-    d.save_as(str(dst))
-   if dst.stat().st_size<1:raise RuntimeError('empty download')
+    raise
    return dst,nm
   finally:
    try:c.close()
@@ -96,17 +148,20 @@ class Engine:
  def remote(self,cr,nm,i,local_sha,local_size):
   try:d=datetime.fromisoformat(cr) if cr else None;y,m=(f'{d.year:04d}',f'{d.month:02d}') if d else ('Unknown-Date','00')
   except:y,m='Unknown-Date','00'
-  base=f'{self.a.root}/{y}/{m}/{Path(nm).name}';q=cmd('rclone','lsl',base,ok=False,cap=True)
-  if q.returncode==0 and q.stdout.strip():
+  name=Path(nm).name;stem,ext=os.path.splitext(name);folder=f'{self.a.root}/{y}/{m}'
+  candidates=[f'{folder}/{name}',f'{folder}/{stem}__{i[:12]}{ext}',f'{folder}/{stem}__{i[:12]}__{local_sha[:16]}{ext}']
+  for base in candidates:
+   q=cmd('rclone','lsl',base,ok=False,cap=True)
+   if q.returncode in (3,4) or (q.returncode==0 and not q.stdout.strip()):return base,False
+   if q.returncode:raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED')
    try:remote_size=int(q.stdout.strip().split()[0])
-   except:remote_size=-1
+   except (ValueError,IndexError):raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED') from None
    if remote_size==local_size:
     check=self.wd/f'{i}__remote-verify';cmd('rclone','copyto',base,str(check))
     try:
      if sha(check)==local_sha:return base,True
     finally:check.unlink(missing_ok=True)
-   s,x=os.path.splitext(Path(nm).name);base=f'{self.a.root}/{y}/{m}/{s}__{i[:12]}{x}'
-  return base,False
+  raise RuntimeError('REMOTE_COLLISION_UNRESOLVED')
  def verify_remote_size(self,remote,expected):
   for attempt in range(3):
    result=cmd('rclone','lsl',remote,'--retries','1','--low-level-retries','1','--contimeout','10s','--timeout','20s',ok=False,cap=True)
@@ -135,10 +190,12 @@ class Engine:
      if not retryable or attempt==3 or self.left()<240:raise
      print(f'DOWNLOAD_RETRY id={i} attempt={attempt} error={message[:180]}',flush=True)
      time.sleep(min(attempt*2,5))
+   actual_type=validate_media(f,nm,t)
+   verified_type=actual_type if actual_type in ('photo','video') else None
    sz=f.stat().st_size;h=sha(f);r,exists=self.remote(cr,nm,i,h,sz)
    if not exists:cmd('rclone','copyto',str(f),r,'--ignore-times','--retries','3')
    self.verify_remote_size(r,sz)
-   self.db.done(i,nm,sz,h,r);self.stats['uploaded']+=1
+   self.db.done(i,nm,sz,h,r,media_type=verified_type);self.stats['uploaded']+=1
    if update_checkpoint:self.cp.update({'last_uploaded_id':i,'last_uploaded_at':now()})
    if flush_state:self.flush()
    print(f'UPLOAD_OK id={i} file={nm} size={sz} reused={exists}',flush=True)

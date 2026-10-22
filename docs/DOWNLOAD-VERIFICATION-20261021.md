@@ -1,3 +1,5 @@
+> Superseded Daily download identity on 22 October: [verified preview-as-video diagnosis and correction](VIDEO-ORIGINAL-IDENTITY-20261022.md). The first-request HTTP replay was unsafe; byte/hash agreement alone did not prove an original video.
+
 # Download verification and Daily scan — 21 October 2026
 
 ## Observed evidence (historical, not current inventory)

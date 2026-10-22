@@ -81,7 +81,7 @@ jobs:
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
           timeout --signal=INT --kill-after=30s 18300s \
-            python3 -m src.gphotos_web_backup --scan-seconds 600 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+            python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash

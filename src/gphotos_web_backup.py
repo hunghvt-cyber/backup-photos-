@@ -210,7 +210,7 @@ class WebBackup:
                 last_error = DownloadError('ORIGINAL_URL_MISSING')
                 continue
             try:
-                self.fetch_original(original, dst, ext.size)
+                self.fetch_original(original, dst, ext.size, route=route)
                 last_error = None
                 return dst, name
             except DownloadError as exc:
@@ -227,7 +227,7 @@ class WebBackup:
                 print('ORIGINAL_FALLBACK reason=' + str(last_error), flush=True)
         raise last_error or DownloadError('ORIGINAL_URL_MISSING')
 
-    def fetch_original(self, original, dst, expected_size):
+    def fetch_original(self, original, dst, expected_size, route=0):
         def allowed(url):
             parsed = urlparse(url)
             return (parsed.scheme == 'https' and not parsed.username and not parsed.password
@@ -247,6 +247,10 @@ class WebBackup:
                         out.write(chunk)
                 actual = dst.stat().st_size
                 if not actual or (expected_size and actual != expected_size):
+                    # Numeric diagnostics only: never expose signed URLs or filenames.
+                    print('ORIGINAL_SIZE_DIAGNOSTIC=' + json.dumps({
+                        'route': route, 'expected_bytes': expected_size,
+                        'actual_bytes': actual}), flush=True)
                     raise DownloadError('ORIGINAL_SIZE_MISMATCH')
         except BaseException:
             dst.unlink(missing_ok=True)

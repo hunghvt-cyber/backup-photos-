@@ -186,7 +186,7 @@ class Engine:
      break
     except Exception as download_error:
      message=str(download_error)
-     retryable=any(token in message.lower() for token in ('target page, context or browser has been closed','timeout','http error 403','forbidden','net::err'))
+     retryable=any(token in message.lower() for token in ('target page, context or browser has been closed','timeout','connectionerror','http error 403','forbidden','net::err'))
      if not retryable or attempt==3 or self.left()<240:raise
      print(f'DOWNLOAD_RETRY id={i} attempt={attempt} error={message[:180]}',flush=True)
      time.sleep(min(attempt*2,5))

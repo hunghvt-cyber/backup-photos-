@@ -1,4 +1,7 @@
 """Fault regressions: never turn uncertain media or stalled scans into success."""
+import contextlib
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,10 +54,45 @@ class VerificationTests(unittest.TestCase):
 
     def test_both_routes_wrong_size_leave_no_file(self):
         w = self.web([self.response(b'bad'), self.response(b'bad')])
-        with patch('src.gphotos_web_backup.execute', side_effect=self.metadata()):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch('src.gphotos_web_backup.execute', side_effect=self.metadata()):
             with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_SIZE_MISMATCH'):
                 w.download(None, '', 'media')
         self.assertFalse((self.e.wd / 'media__photo.jpg').exists())
+        diagnostics = [json.loads(line.split('=', 1)[1]) for line in output.getvalue().splitlines()
+                       if line.startswith('ORIGINAL_SIZE_DIAGNOSTIC=')]
+        self.assertEqual(diagnostics, [dict(route=route, expected_bytes=8, actual_bytes=3)
+                                      for route in (0, 1)])
+        self.assertNotIn('https://', output.getvalue())
+        self.assertNotIn('photo.jpg', output.getvalue())
+
+    def test_connection_error_retries_and_verifies_before_marking_uploaded(self):
+        f = self.e.wd / 'download'; f.write_bytes(b'original')
+        self.e.download = MagicMock(side_effect=[
+            RuntimeError('Web original download failed: ConnectionError'), (f, 'photo.jpg')])
+        self.e.remote = MagicMock(return_value=('koofr:file', True))
+        self.e.verify_remote_size = MagicMock()
+        with patch('src.gphotos_sync.time.sleep'):
+            self.e.one(None, 'media', 'photo', 'url', None, None)
+        self.assertEqual(self.e.download.call_count, 2)
+        self.e.verify_remote_size.assert_called_once_with('koofr:file', 8)
+        self.assertTrue(self.e.db.uploaded('media'))
+        self.assertEqual((self.e.stats['uploaded'], self.e.stats['errors']), (1, 0))
+
+    def test_connection_error_retry_cap_and_time_reserve_keep_manifest_error(self):
+        for remaining, attempts in ((1000, 3), (239, 1)):
+            with self.subTest(remaining=remaining):
+                self.e.left = lambda: remaining
+                self.e.download = MagicMock(side_effect=RuntimeError(
+                    'Web original download failed: ConnectionError'))
+                self.e.remote = MagicMock()
+                with patch('src.gphotos_sync.time.sleep'):
+                    self.e.one(None, 'media', 'photo', 'url', None, None)
+                self.assertEqual(self.e.download.call_count, attempts)
+                self.e.remote.assert_not_called()
+                self.assertFalse(self.e.db.uploaded('media'))
+                self.assertEqual(self.e.db.c.execute(
+                    "SELECT status FROM media WHERE id='media'").fetchone()[0], 'error')
 
     def test_html_and_403_can_use_valid_original_fallback(self):
         for first in (self.response(b'<html>', 'text/html'), self.response(b'')):

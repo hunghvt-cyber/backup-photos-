@@ -1,4 +1,4 @@
-name: Publish completed Backfill progress
+name: Publish Backfill run result
 on:
   workflow_run:
     workflows: ['Google Photos Historical Backfill']

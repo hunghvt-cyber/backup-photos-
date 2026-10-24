@@ -41,6 +41,11 @@ If Google explicitly requires login again, recreate the interactive profile in C
 
 ## Failure semantics
 
+Investigation and corrective change for the 24/10 Backfill:
+[runtime evidence and remaining validation](BACKFILL-FAILURE-20261024.md).
+`Publish Backfill run result` can succeed while publishing `outcome=failure`;
+use the source outcome and pending counts to assess backup progress.
+
 - A media upload is not marked complete until Koofr reports the same byte size as the local download.
 - The remote SQLite manifest is written from a consistent SQLite Backup API snapshot, never by copying the live WAL database.
 - If manifest state is missing but an existing Koofr candidate matches size and SHA-256, the existing object is reused and manifest state is reconstructed.

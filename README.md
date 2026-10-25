@@ -14,13 +14,15 @@ One-way, resumable backup of an existing Google Photos library to Koofr, designe
 
 ## Status
 
+Latest reviewed snapshot: [weekly read-only review, 25 October](docs/WEEKLY-REVIEW-20261025.md). It separates successful new runs from pending errors and unverified original recovery.
+
 The foundation and production path have been proven on fresh GitHub-hosted runners:
 
 - restore an AES-256/PBKDF2 encrypted Chrome profile from Koofr;
 - open the authenticated Google Photos library headlessly;
 - enumerate opaque Google Photos media IDs;
 - trigger Google's official Download action;
-- replay the authenticated download request and obtain the real file;
+- save the exact browser Download for Daily, or use the reviewed metadata/signed-original route for Backfill with source-size validation;
 - compute SHA-256, upload through rclone/WebDAV, and verify remote byte size;
 - persist SQLite manifest and JSON checkpoint back to Koofr.
 

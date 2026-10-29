@@ -68,3 +68,51 @@ is to check/refresh the existing worker's Google session through the established
 private profile flow, then repeat one bounded canary. Do not weaken media
 validation, follow an alternate provider route, reset cursors, purge backups or
 merge under a claim of production recovery.
+
+## Follow-up diagnostic implementation — 29 October 2026
+
+The decoded log for run 40820467446 was filtered in memory before analysis; no
+raw Actions log was sent to Gemini. It contains two timeout snapshots. The first
+was still on `photos.google.com`, with a sign-in form and challenge selector
+present; `WIZ_global_data` existed but `FdrFJe`, `cfb2h` and `Im6cmf` were
+`NoneType` (only `SNlM0e` was a string). The later snapshot was on
+`www.google.com`, with no form, challenge selector or bootstrap object. Both
+reported `WEB_BOOTSTRAP_STATUS=UNAVAILABLE`. The profile restore step succeeded
+and profile persistence was skipped, preserving the original encrypted Koofr
+archive. No media was attempted. This sequence does not establish whether the
+cause was authentication, Google challenge/routing, profile compatibility, or
+page metadata timing/schema.
+
+Gemini's first analysis independently reached the same limit: the redirect and
+one incomplete metadata snapshot do not prove session expiry or bot detection.
+It recommended recording a sanitized main-frame redirect chain and HTTP
+statuses, page-state booleans, metadata presence/types, actual profile
+structure/access, and Chromium version.
+
+The follow-up code adds those filtered diagnostics. Only exact allowlisted
+Google hostnames are emitted; unknown hosts become `[other-host]`, unknown path
+segments become `[redacted]`, and query/fragment are discarded. A manual
+`bootstrap_diagnostic=true` workflow input restores the encrypted profile,
+copies it to a disposable profile directory, and performs one bootstrap-only
+navigation with no manifest restore, inventory, media attempt, or profile
+persist. The original encrypted Koofr profile remains untouched. The run also
+reports profile archive/layout/access facts and the Chromium version; it does
+not collect a screenshot.
+
+Offline validation after this change: compileall and 92/92 unit tests pass;
+workflow YAML and bash blocks parse; `git diff --check` passes. No local
+`gphotos-profile`, Chromium executable, or Koofr credentials were available in
+the checkout environment, so the new one-time diagnostic run has not yet been
+executed. No `READY`, media enumeration, image/video upload, checksum, Koofr
+object, or resume result is claimed. Do not run an ordinary Backfill canary.
+
+Required operator action: after this branch is pushed, open Actions → Google
+Photos Historical Backfill → Run workflow, leave `max_items` at `1`, set
+`bootstrap_diagnostic` to `true`, and start exactly one run. Share only the run
+ID; its log can be fetched and filtered for review. If it reports
+`AUTH_REQUIRED`, `CONSENT_REQUIRED`, or an equivalent sign-in gate, refresh the
+session by opening the established private profile interactively on the
+trusted machine that owns it, confirm Photos opens, close Chromium cleanly, and
+allow the normal encrypted profile-save flow to update Koofr. Never send the
+password in chat. If profile ownership or that trusted machine is unavailable,
+stop and ask the owner to perform those steps; do not replace the Koofr archive.

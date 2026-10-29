@@ -4,7 +4,8 @@ from types import SimpleNamespace as NS
 from unittest.mock import MagicMock, patch
 from gpwc import Client
 from src.gphotos_sync import DB
-from src.gphotos_web_backup import BoundedClient, browser_bootstrap, validated_bootstrap, execute, main
+from src.gphotos_web_backup import (BoundedClient, browser_bootstrap, validated_bootstrap,
+                                    execute, main, safe_navigation_location, navigation_diagnostics)
 
 
 def bootstrap():
@@ -12,6 +13,45 @@ def bootstrap():
                 Im6cmf='/_/PhotosUi',oPEP7c='private@example.invalid')
 
 class BootstrapTests(unittest.TestCase):
+    def test_navigation_location_allowlists_host_and_redacts_unknown_path(self):
+        safe = safe_navigation_location('https://www.google.com/sorry/private@example.invalid?token=secret#frag')
+        self.assertEqual(safe, {'host': 'www.google.com', 'path': '/sorry/[redacted]'})
+        self.assertEqual(safe_navigation_location('https://evil.invalid/private?token=secret'),
+                         {'host': '[other-host]', 'path': '/[redacted]'})
+
+    def test_navigation_chain_records_only_main_frame_safe_location_and_status(self):
+        page = MagicMock(); page.main_frame = object()
+        chain = navigation_diagnostics(page)
+        handlers = {call.args[0]: call.args[1] for call in page.on.call_args_list}
+        request = MagicMock(); request.is_navigation_request.return_value = True
+        request.frame = page.main_frame
+        request.url = 'https://accounts.google.com/private@example.invalid?token=secret'
+        handlers['request'](request)
+        response = MagicMock(); response.request = request; response.status = 302
+        handlers['response'](response)
+        self.assertEqual(chain, [{'host': 'accounts.google.com', 'path': '/[redacted]', 'http_status': 302}])
+
+    def test_bootstrap_only_skips_engine_state_and_reports_sanitized_navigation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            page = MagicMock(); page.url = 'https://www.google.com/sorry/private?token=secret'
+            page.goto.return_value = NS(status=429)
+            browser = MagicMock(); browser.pages = [page]
+            pw = MagicMock(); pw.chromium.launch_persistent_context.return_value = browser
+            manager = MagicMock(); manager.__enter__.return_value = pw
+            out = io.StringIO()
+            with patch('sys.argv', ['worker', '--bootstrap-only']), \
+                 patch.dict('os.environ', {'GPHOTOS_PROFILE_DIR': temp}), \
+                 patch('src.gphotos_web_backup.Engine') as engine, \
+                 patch('src.gphotos_web_backup.sync_playwright', return_value=manager), \
+                 contextlib.redirect_stdout(out):
+                result = main()
+            self.assertEqual(result, 1)
+            engine.assert_not_called()
+            self.assertIn("executable_path='/usr/bin/google-chrome-stable'", str(pw.chromium.launch_persistent_context.call_args))
+            text = out.getvalue()
+            self.assertNotIn('secret', text)
+            self.assertIn('"path":"/sorry/[redacted]","http_status":429', text)
+            self.assertIn('WEB_BOOTSTRAP_STATUS=CHALLENGE_REQUIRED', text)
     def test_upstream_missing_script_reproduces_indexerror(self):
         with self.assertRaises(IndexError):
             Client.__new__(Client).parse_main_page('<html><script>window.WIZ_global_data = {};</script></html>')

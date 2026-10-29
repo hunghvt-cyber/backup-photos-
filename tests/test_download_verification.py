@@ -161,6 +161,7 @@ class VerificationTests(unittest.TestCase):
     def test_browser_download_uses_exact_event_never_preview_request(self):
         context = MagicMock()
         page = MagicMock()
+        page.url = "https://photos.google.com/"
         context.pages = [page]
         download = NS(suggested_filename='photo.jpg', save_as=lambda dest: Path(dest).write_bytes(b'\xff\xd8\xfforiginal'))
         page.expect_download.return_value.__enter__.return_value.value = download
@@ -175,6 +176,7 @@ class VerificationTests(unittest.TestCase):
     def test_scan_collects_intermediate_viewports_before_closing_profile(self):
         context = MagicMock()
         page = MagicMock()
+        page.url = "https://photos.google.com/"
         context.pages = [page]
         page.locator.return_value.count.return_value = 1
         pw = NS(chromium=NS(launch_persistent_context=MagicMock(return_value=context)))

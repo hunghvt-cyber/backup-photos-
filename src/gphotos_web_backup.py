@@ -79,7 +79,11 @@ def browser_bootstrap(page, timeout_ms=30000, poll_ms=500):
     remaining = timeout_ms
     value = None
     while True:
-        host = (urlparse(page.url).hostname or '').lower()
+        location = urlparse(page.url)
+        host = (location.hostname or '').lower()
+        if host == 'www.google.com' and location.path.startswith('/sorry/'):
+            print('WEB_BOOTSTRAP_STATUS=CHALLENGE_REQUIRED', flush=True)
+            raise RuntimeError('WEB_CHALLENGE_REQUIRED')
         if host in ('accounts.google.com', 'consent.google.com'):
             code = 'AUTH_REQUIRED' if host == 'accounts.google.com' else 'CONSENT_REQUIRED'
             print('WEB_BOOTSTRAP_STATUS=' + code, flush=True)
@@ -95,6 +99,9 @@ def browser_bootstrap(page, timeout_ms=30000, poll_ms=500):
                 return result
         if remaining <= 0:
             diagnostic = {'photos_host': host == 'photos.google.com',
+                          'host_class': host if host in ('photos.google.com','accounts.google.com','consent.google.com','www.google.com','myaccount.google.com') else ('blank' if location.scheme == 'about' else 'other'),
+                          'signin_form': bool(page.locator('input[type="email"],input[name="Passwd"]').count()),
+                          'challenge_frame': bool(page.locator('iframe[src*="recaptcha"],#captcha-form').count()),
                           'global_present': isinstance(value, dict),
                           'field_types': {k: type(value.get(k)).__name__ if isinstance(value, dict) else 'absent'
                                           for k in BOOTSTRAP_KEYS}}

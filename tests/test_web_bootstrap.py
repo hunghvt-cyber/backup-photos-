@@ -41,6 +41,14 @@ class BootstrapTests(unittest.TestCase):
         data=bootstrap();del data['oPEP7c']
         self.assertEqual(validated_bootstrap(data)['oPEP7c'],'redacted')
 
+    def test_google_challenge_stops_without_trying_another_route(self):
+        page=MagicMock();page.url='https://www.google.com/sorry/index?private-token'
+        out=io.StringIO()
+        with contextlib.redirect_stdout(out),self.assertRaisesRegex(RuntimeError,'WEB_CHALLENGE_REQUIRED'):
+            browser_bootstrap(page)
+        page.evaluate.assert_not_called();page.wait_for_timeout.assert_not_called()
+        self.assertNotIn('private-token',out.getvalue())
+
     def test_client_reuses_tokens_without_second_html_fetch(self):
         with tempfile.TemporaryDirectory() as temp:
             cookies=Path(temp)/'cookies.txt';cookies.write_text('# Netscape HTTP Cookie File\n');cookies.chmod(0o600)

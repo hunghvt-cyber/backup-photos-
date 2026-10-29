@@ -71,6 +71,9 @@ merge under a claim of production recovery.
 
 ## Follow-up diagnostic implementation — 29 October 2026
 
+Implementation commit: `980df25ef7f14f0399453bc5ec3012e4108bfa85` on
+`fix/backfill-browser-bootstrap-20261029` (PR #14).
+
 The decoded log for run 40820467446 was filtered in memory before analysis; no
 raw Actions log was sent to Gemini. It contains two timeout snapshots. The first
 was still on `photos.google.com`, with a sign-in form and challenge selector
@@ -88,6 +91,8 @@ one incomplete metadata snapshot do not prove session expiry or bot detection.
 It recommended recording a sanitized main-frame redirect chain and HTTP
 statuses, page-state booleans, metadata presence/types, actual profile
 structure/access, and Chromium version.
+The independent Gemini review of a new runtime diagnostic is still pending;
+there is no new diagnostic run to review yet.
 
 The follow-up code adds those filtered diagnostics. Only exact allowlisted
 Google hostnames are emitted; unknown hosts become `[other-host]`, unknown path

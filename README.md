@@ -1,3 +1,5 @@
+> 29/10 engine: [browser-session bootstrap correction and bounded canary](docs/BACKFILL-ENGINE-BOOTSTRAP-20261029.md). Offline tests pass; authenticated runtime is validated separately.
+
 > 29/10: [backup/report recovery](docs/BACKUP-REPORT-RECOVERY-20261029.md) — canonical repo names, compatible GAS reports and guarded runtime fixes; live validation remains separate.
 
 > Backfill progress 22/10: [nhánh báo cáo riêng cho Homepage](docs/BACKFILL-PROGRESS-20261022.md). Daily vẫn qua GAS; Backfill chỉ xuất aggregate sau khi chốt lượt, không gửi giả Daily.

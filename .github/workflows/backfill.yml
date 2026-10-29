@@ -7,6 +7,11 @@ on:
         description: "Maximum historical images/videos to attempt (subject to time budget)"
         required: false
         default: "10000"
+      bootstrap_diagnostic:
+        description: "One bootstrap-only check using a disposable copy of the restored profile"
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Every day 04:45 Vietnam. Serialized with Daily and Reconcile.
     - cron: "45 21 * * *"
@@ -27,8 +32,10 @@ jobs:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "18000"
+      # Manual max_items=1 is a bounded canary; scheduled runs retain 5h.
+      MAX_RUNTIME_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.max_items == '1' && '900' || '18000' }}
       MAX_ITEMS: ${{ inputs.max_items || '10000' }}
+      BOOTSTRAP_DIAGNOSTIC: ${{ inputs.bootstrap_diagnostic || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and configure runtime
@@ -69,8 +76,74 @@ jobs:
           set -euo pipefail
           rclone copyto 'koofr_remote:/Google Photos/.gphotos-sync/auth/profile.tar.gz.enc' /tmp/profile.enc
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in /tmp/profile.enc -out /tmp/profile.tgz -pass env:GPHOTOS_PROFILE_KEY
+          python3 - <<'PY'
+          import json, tarfile
+          with tarfile.open('/tmp/profile.tgz', 'r:gz') as archive:
+              names = [m.name.lstrip('./') for m in archive.getmembers()]
+          expected = ('gphotos-profile/Local State', 'gphotos-profile/Default/Preferences',
+                      'gphotos-profile/Default/Cookies', 'gphotos-profile/Default/Network/Cookies')
+          print('PROFILE_ARCHIVE_STRUCTURE=' + json.dumps({
+              'member_count': len(names),
+              'expected_root_present': any(n == 'gphotos-profile' or n.startswith('gphotos-profile/') for n in names),
+              'local_state_present': any(n.endswith('/Local State') for n in names),
+              'default_preferences_present': any(n.endswith('/Default/Preferences') for n in names),
+              'cookie_store_present': any(n.endswith('/Default/Cookies') or n.endswith('/Default/Network/Cookies') for n in names),
+              'expected_profile_member_names': {name.rsplit('/', 1)[-1]: name in names for name in expected}
+          }, separators=(',', ':')))
+          PY
           tar -C "$HOME" -xzf /tmp/profile.tgz
-          rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+          python3 - <<'PY'
+          import json, os, pathlib, stat
+          p = pathlib.Path.home() / 'gphotos-profile'
+          facts = {'profile_path': str(p), 'is_dir': p.is_dir(), 'readable': os.access(p, os.R_OK),
+                   'writable': os.access(p, os.W_OK), 'executable': os.access(p, os.X_OK)}
+          for label, candidate in [('local_state', p / 'Local State'), ('default_dir', p / 'Default'),
+                                   ('preferences', p / 'Default' / 'Preferences'),
+                                   ('cookies', p / 'Default' / 'Cookies'),
+                                   ('network_cookies', p / 'Default' / 'Network' / 'Cookies')]:
+              try:
+                  st = candidate.stat()
+                  facts[label] = {'present': True, 'mode': format(stat.S_IMODE(st.st_mode), '04o'),
+                                  'readable': os.access(candidate, os.R_OK),
+                                  'writable': os.access(candidate, os.W_OK)}
+              except OSError:
+                  facts[label] = {'present': False}
+          print('PROFILE_RUNTIME_DIAGNOSTIC=' + json.dumps(facts, separators=(',', ':')))
+          PY
+          CHROME_BIN="$(command -v google-chrome-stable || command -v google-chrome)"
+          echo "CHROME_BIN=$CHROME_BIN" >> "$GITHUB_ENV"
+          CHROMIUM_VERSION="$($CHROME_BIN --version | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+).*$/\1/')"
+          echo "CHROMIUM_VERSION=$CHROMIUM_VERSION" >> "$GITHUB_ENV"
+          echo "CHROMIUM_VERSION=$CHROMIUM_VERSION"
+          if [ "$BOOTSTRAP_DIAGNOSTIC" = true ]; then
+            cp -a "$HOME/gphotos-profile" "$HOME/gphotos-profile-diagnostic"
+            rm -f "$HOME/gphotos-profile-diagnostic/SingletonLock" "$HOME/gphotos-profile-diagnostic/SingletonSocket" "$HOME/gphotos-profile-diagnostic/SingletonCookie"
+            echo "GPHOTOS_PROFILE_DIR=$HOME/gphotos-profile-diagnostic" >> "$GITHUB_ENV"
+            PROFILE_USED_DIR="$HOME/gphotos-profile-diagnostic"
+            echo "BOOTSTRAP_DIAGNOSTIC_PROFILE=COPIED" >> "$GITHUB_ENV"
+          else
+            rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
+            echo "GPHOTOS_PROFILE_DIR=$HOME/gphotos-profile" >> "$GITHUB_ENV"
+            PROFILE_USED_DIR="$HOME/gphotos-profile"
+          fi
+          PROFILE_USED_DIR="$PROFILE_USED_DIR" python3 - <<'PY'
+          import json, os, pathlib, stat
+          p = pathlib.Path(os.environ['PROFILE_USED_DIR'])
+          facts = {'profile_path': str(p), 'is_dir': p.is_dir(), 'readable': os.access(p, os.R_OK),
+                   'writable': os.access(p, os.W_OK), 'executable': os.access(p, os.X_OK)}
+          for label, candidate in [('local_state', p / 'Local State'), ('default_dir', p / 'Default'),
+                                   ('preferences', p / 'Default' / 'Preferences'),
+                                   ('cookies', p / 'Default' / 'Cookies'),
+                                   ('network_cookies', p / 'Default' / 'Network' / 'Cookies')]:
+              try:
+                  st = candidate.stat()
+                  facts[label] = {'present': True, 'mode': format(stat.S_IMODE(st.st_mode), '04o'),
+                                  'readable': os.access(candidate, os.R_OK),
+                                  'writable': os.access(candidate, os.W_OK)}
+              except OSError:
+                  facts[label] = {'present': False}
+          print('PROFILE_USED_RUNTIME_DIAGNOSTIC=' + json.dumps(facts, separators=(',', ':')))
+          PY
           rm -f /tmp/profile.enc /tmp/profile.tgz
       - name: Historical backfill
         id: backfill
@@ -80,8 +153,20 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s 18300s \
-            python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          SCAN_SECONDS=600
+          WATCHDOG_SECONDS=18300
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$MAX_ITEMS" = 1 ]; then
+            SCAN_SECONDS=30
+            WATCHDOG_SECONDS=930
+            echo "BACKFILL_CANARY max_items=1 runtime_seconds=900 scan_seconds=30"
+          fi
+          if [ "$BOOTSTRAP_DIAGNOSTIC" = true ]; then
+            timeout --signal=INT --kill-after=30s 120s \
+              python3 -m src.gphotos_web_backup --bootstrap-only 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          else
+            timeout --signal=INT --kill-after=30s "${WATCHDOG_SECONDS}s" \
+              python3 -m src.gphotos_web_backup --scan-seconds "$SCAN_SECONDS" --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          fi
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -89,6 +174,14 @@ jobs:
           set -euo pipefail
           if [ ! -d "$HOME/gphotos-profile" ] || ! command -v rclone >/dev/null; then
             echo "No worker profile to persist"
+            exit 0
+          fi
+          if [ "$BOOTSTRAP_DIAGNOSTIC" = true ]; then
+            echo "PROFILE_PERSIST_SKIPPED: diagnostic copy is disposable"
+            exit 0
+          fi
+          if ! grep -qx "WEB_BOOTSTRAP_STATUS=READY" "$RUNNER_TEMP/gphotos-backfill.log"; then
+            echo "PROFILE_PERSIST_SKIPPED: browser bootstrap not verified; original encrypted profile preserved"
             exit 0
           fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
@@ -114,7 +207,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -rf "$HOME/gphotos-profile" /tmp/gphotos-downloads /tmp/gphotos-state || true
+          rm -rf "$HOME/gphotos-profile" "$HOME/gphotos-profile-diagnostic" /tmp/gphotos-downloads /tmp/gphotos-state || true
           rm -f "$HOME/.config/rclone/rclone.conf" || true
 
       - name: Historical backfill report

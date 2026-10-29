@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import time
+import traceback
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
@@ -30,7 +31,10 @@ def export_cookies(context, path):
 
 
 def execute(client, payload):
-    response = payload.execute(client)
+    try:
+        response = payload.execute(client)
+    except (IndexError, KeyError, TypeError):
+        raise RuntimeError('WEB_RPC_SCHEMA_CHANGED') from None
     if not response.success or response.data is None:
         raise RuntimeError('Empty/failed web API response')
     return response.data
@@ -57,11 +61,125 @@ class DownloadError(RuntimeError):
     """Safe diagnostic code without URLs or credentials."""
 
 
+BOOTSTRAP_KEYS = ('FdrFJe', 'cfb2h', 'SNlM0e', 'Im6cmf')
+NAV_HOSTS = {'photos.google.com', 'www.google.com', 'accounts.google.com', 'consent.google.com'}
+NAV_PATH_SEGMENTS = {'sorry', 'signin', 'ServiceLogin', 'v3', 'challenge', 'consent',
+                     'photos', 'photo', 'accounts', 'CheckCookie', 'SetSID', 'lookup',
+                     'identifier', 'auth', 'user', '0'}
+
+
+def safe_navigation_location(raw_url):
+    """Return only an allowlisted Google host and non-identifying path segments."""
+    location = urlparse(raw_url)
+    host = (location.hostname or '').lower()
+    safe_host = host if host in NAV_HOSTS else '[other-host]'
+    segments = [segment for segment in location.path.split('/') if segment]
+    safe_segments = [segment if segment in NAV_PATH_SEGMENTS else '[redacted]' for segment in segments]
+    path = '/' + '/'.join(safe_segments) if safe_segments else '/'
+    return {'host': safe_host, 'path': path}
+
+
+def navigation_diagnostics(page):
+    """Attach main-frame listeners and retain sanitized redirect/status facts only."""
+    events = []
+    seen = {}
+
+    def is_main_frame(request):
+        try:
+            return request.is_navigation_request() and request.frame == page.main_frame
+        except Exception:
+            return False
+
+    def on_request(request):
+        if is_main_frame(request):
+            item = safe_navigation_location(request.url)
+            item['http_status'] = None
+            seen[request] = item
+            events.append(item)
+
+    def on_response(response):
+        request = response.request
+        if request in seen:
+            seen[request]['http_status'] = int(response.status)
+
+    page.on('request', on_request)
+    page.on('response', on_response)
+    return events
+
+
+def validated_bootstrap(value):
+    # Values contain session material: keep in memory and never log/serialize it.
+    if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in BOOTSTRAP_KEYS):
+        raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
+    if not value['Im6cmf'].startswith('/') or value['Im6cmf'].startswith('//'):
+        raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
+    return {**{key: value[key] for key in BOOTSTRAP_KEYS},
+            'oPEP7c': value.get('oPEP7c') if isinstance(value.get('oPEP7c'), str) else 'redacted'}
+
+
+def browser_bootstrap(page, timeout_ms=30000, poll_ms=500, navigation=None):
+    """Read the existing browser session, independent of media-tile selectors."""
+    remaining = timeout_ms
+    value = None
+
+    def emit_navigation():
+        if navigation is not None:
+            print('WEB_NAVIGATION_CHAIN=' + json.dumps(navigation, separators=(',', ':')), flush=True)
+
+    while True:
+        location = urlparse(page.url)
+        host = (location.hostname or '').lower()
+        if host == 'www.google.com' and location.path.startswith('/sorry/'):
+            emit_navigation()
+            print('WEB_BOOTSTRAP_STATUS=CHALLENGE_REQUIRED', flush=True)
+            raise RuntimeError('WEB_CHALLENGE_REQUIRED')
+        if host in ('accounts.google.com', 'consent.google.com'):
+            code = 'AUTH_REQUIRED' if host == 'accounts.google.com' else 'CONSENT_REQUIRED'
+            emit_navigation()
+            print('WEB_BOOTSTRAP_STATUS=' + code, flush=True)
+            raise RuntimeError('WEB_' + code)
+        if host == 'photos.google.com':
+            value = page.evaluate('() => window.WIZ_global_data || null')
+            try:
+                result = validated_bootstrap(value)
+            except RuntimeError:
+                pass
+            else:
+                emit_navigation()
+                print('WEB_BOOTSTRAP_STATUS=READY', flush=True)
+                return result
+        if remaining <= 0:
+            signin_form = bool(page.locator('input[type="email"],input[name="Passwd"]').count())
+            challenge_frame = bool(page.locator('iframe[src*="recaptcha"],#captcha-form,[id*="captcha"]').count())
+            consent_indicator = bool(page.locator('form[action*="consent"],button[name*="accept"],#consent-bump').count())
+            diagnostic = {'photos_host': host == 'photos.google.com',
+                          'host_class': host if host in NAV_HOSTS else ('blank' if location.scheme == 'about' else 'other'),
+                          'signin_form': signin_form,
+                          'consent_indicator': consent_indicator,
+                          'challenge_frame': challenge_frame,
+                          'challenge_path': host == 'www.google.com' and location.path.startswith('/sorry/'),
+                          'global_present': isinstance(value, dict),
+                          'field_types': {k: type(value.get(k)).__name__ if isinstance(value, dict) else 'absent'
+                                          for k in BOOTSTRAP_KEYS}}
+            emit_navigation()
+            print('WEB_BOOTSTRAP_DIAGNOSTIC=' + json.dumps(diagnostic), flush=True)
+            print('WEB_BOOTSTRAP_STATUS=UNAVAILABLE', flush=True)
+            raise RuntimeError('WEB_BOOTSTRAP_UNAVAILABLE')
+        wait = min(poll_ms, remaining)
+        page.wait_for_timeout(wait)
+        remaining -= wait
+
+
 class BoundedClient(Client):
+    def __init__(self, *args, bootstrap_data, **kwargs):
+        self._browser_bootstrap = validated_bootstrap(bootstrap_data)
+        super().__init__(*args, **kwargs)
+
     def get_global_data(self):
-        # Bound authentication/bootstrap requests as well as subsequent RPCs.
+        # Reuse tokens from the same browser that exported the cookies. Avoid
+        # a second requests-only HTML login/bootstrap parse with xpath(...)[0].
         self.session.request = functools.partial(self.session.request, timeout=(30, 120))
-        return super().get_global_data()
+        return dict(self._browser_bootstrap)
 
 
 class WebBackup:
@@ -279,6 +397,10 @@ class WebBackup:
                 if self.e.stats['attempted'] % 10 == 0:
                     self.e.flush()
         self.e.flush()
+        self.report(inventory_error, probe)
+        return int(inventory_error or self.e.stats['errors'] > 0)
+
+    def report(self, inventory_error=False, probe=False):
         counts = dict(self.db.execute('SELECT status,COUNT(*) FROM media GROUP BY status').fetchall())
         complete = not bool(self.db.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone()) and not inventory_error
         report = {**self.e.stats, 'inventory_complete': complete, 'inventory_error': inventory_error,
@@ -289,7 +411,7 @@ class WebBackup:
                   'album_memberships': self.db.execute('SELECT COUNT(*) FROM web_album_items').fetchone()[0],
                   'probe': probe, 'status': 'PARTIAL' if inventory_error or self.e.stats['errors'] else 'PAUSED'}
         print('WEB_SUMMARY=' + json.dumps(report), flush=True)
-        return int(inventory_error or self.e.stats['errors'] > 0)
+        return report
 
 
 def main():
@@ -300,31 +422,79 @@ def main():
     parser.add_argument('--scan-seconds', type=int, default=1200)
     parser.add_argument('--inventory-refresh-seconds', type=int, default=0)
     parser.add_argument('--inventory-checkpoint-pages', type=int, default=1)
+    parser.add_argument('--bootstrap-only', action='store_true', help=argparse.SUPPRESS)
     a = parser.parse_args()
     if not 0 <= a.inventory_refresh_seconds <= 86400 or not 1 <= a.inventory_checkpoint_pages <= 10:
         parser.error('inventory refresh must be 0..86400 seconds; checkpoint batch must be 1..10 pages')
-    a.profile = os.path.expanduser('~/gphotos-profile')
+    a.profile = os.path.expanduser(os.environ.get('GPHOTOS_PROFILE_DIR', '~/gphotos-profile'))
     a.chrome = os.environ.get('CHROME_BIN', '/usr/bin/google-chrome-stable')
     a.state, a.work = '/tmp/gphotos-state', '/tmp/gphotos-downloads'
     a.root, a.sroot = 'koofr_remote:/Google Photos/Photos', 'koofr_remote:/Google Photos/.gphotos-sync'
+    if a.bootstrap_only:
+        stage = 'browser_bootstrap'
+        try:
+            with sync_playwright() as pw:
+                context = pw.chromium.launch_persistent_context(a.profile, executable_path=a.chrome,
+                    headless=True, args=['--disable-dev-shm-usage','--no-first-run'])
+                try:
+                    page = context.pages[0] if context.pages else context.new_page()
+                    navigation = navigation_diagnostics(page)
+                    response = page.goto('https://photos.google.com/', wait_until='domcontentloaded', timeout=90000)
+                    if response is not None and not navigation:
+                        item = safe_navigation_location(page.url)
+                        item['http_status'] = int(response.status)
+                        navigation.append(item)
+                    browser_bootstrap(page, navigation=navigation)
+                finally:
+                    context.close()
+            print('WEB_BOOTSTRAP_ONLY=COMPLETE', flush=True)
+            return 0
+        except Exception as exc:
+            print('WEB_FATAL type=' + type(exc).__name__ + ' stage=' + stage, flush=True)
+            frames = [{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name}
+                      for f in traceback.extract_tb(exc.__traceback__)[-6:]]
+            print('WEB_FATAL_FRAMES=' + json.dumps(frames), flush=True)
+            return 1
     e = Engine(a)
     cookie_path = e.sd / 'web-cookies.txt'
+    web = None
+    stage = 'manifest_schema'
     try:
+        web = WebBackup(e, None)
+        stage = 'browser_bootstrap'
         with sync_playwright() as pw:
             context = pw.chromium.launch_persistent_context(a.profile, executable_path=a.chrome, headless=True, args=['--disable-dev-shm-usage','--no-first-run'])
             try:
                 page = context.pages[0] if context.pages else context.new_page()
-                page.goto('https://photos.google.com/', wait_until='domcontentloaded', timeout=90000)
-                page.wait_for_timeout(3000)
-                export_cookies(context, cookie_path)
+                navigation = navigation_diagnostics(page)
+                response = page.goto('https://photos.google.com/', wait_until='domcontentloaded', timeout=90000)
+                if response is not None and not navigation:
+                    item = safe_navigation_location(page.url)
+                    item['http_status'] = int(response.status)
+                    navigation.append(item)
+                bootstrap = browser_bootstrap(page, navigation=navigation)
+                if not a.bootstrap_only:
+                    export_cookies(context, cookie_path)
             finally:
                 context.close()
+        if a.bootstrap_only:
+            print('WEB_BOOTSTRAP_ONLY=COMPLETE', flush=True)
+            return 0
         # gpwc logs the account email at INFO. Disable before constructing it.
         logging.disable(logging.CRITICAL)
-        client = BoundedClient(cookie_path, log_level='CRITICAL')
-        return WebBackup(e, client).run(a.scan_seconds, a.probe)
+        stage = 'web_client'
+        client = BoundedClient(cookie_path, bootstrap_data=bootstrap, log_level='CRITICAL')
+        stage = 'inventory_and_upload'
+        web.client = client
+        return web.run(a.scan_seconds, a.probe)
     except Exception as exc:
-        print('WEB_FATAL type=' + type(exc).__name__, flush=True)
+        print('WEB_FATAL type=' + type(exc).__name__ + ' stage=' + stage, flush=True)
+        # Frame metadata only: never exception text, locals, cookies or DOM.
+        frames = [{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name}
+                  for f in traceback.extract_tb(exc.__traceback__)[-6:]]
+        print('WEB_FATAL_FRAMES=' + json.dumps(frames), flush=True)
+        if web is not None:
+            web.report(inventory_error=True, probe=a.probe)
         return 1
     finally:
         cookie_path.unlink(missing_ok=True)

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import time
+import traceback
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
@@ -30,7 +31,10 @@ def export_cookies(context, path):
 
 
 def execute(client, payload):
-    response = payload.execute(client)
+    try:
+        response = payload.execute(client)
+    except (IndexError, KeyError, TypeError):
+        raise RuntimeError('WEB_RPC_SCHEMA_CHANGED') from None
     if not response.success or response.data is None:
         raise RuntimeError('Empty/failed web API response')
     return response.data
@@ -57,11 +61,54 @@ class DownloadError(RuntimeError):
     """Safe diagnostic code without URLs or credentials."""
 
 
+BOOTSTRAP_KEYS = ('FdrFJe', 'cfb2h', 'SNlM0e', 'Im6cmf', 'oPEP7c')
+
+
+def validated_bootstrap(value):
+    # Values contain session material: keep in memory and never log/serialize it.
+    if not isinstance(value, dict) or any(not isinstance(value.get(k), str) or not value[k] for k in BOOTSTRAP_KEYS):
+        raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
+    if not value['Im6cmf'].startswith('/') or value['Im6cmf'].startswith('//'):
+        raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
+    return {key: value[key] for key in BOOTSTRAP_KEYS}
+
+
+def browser_bootstrap(page, timeout_ms=30000, poll_ms=500):
+    """Read the existing browser session, independent of media-tile selectors."""
+    remaining = timeout_ms
+    while True:
+        host = (urlparse(page.url).hostname or '').lower()
+        if host in ('accounts.google.com', 'consent.google.com'):
+            code = 'AUTH_REQUIRED' if host == 'accounts.google.com' else 'CONSENT_REQUIRED'
+            print('WEB_BOOTSTRAP_STATUS=' + code, flush=True)
+            raise RuntimeError('WEB_' + code)
+        if host == 'photos.google.com':
+            value = page.evaluate('() => window.WIZ_global_data || null')
+            try:
+                result = validated_bootstrap(value)
+            except RuntimeError:
+                pass
+            else:
+                print('WEB_BOOTSTRAP_STATUS=READY', flush=True)
+                return result
+        if remaining <= 0:
+            print('WEB_BOOTSTRAP_STATUS=UNAVAILABLE', flush=True)
+            raise RuntimeError('WEB_BOOTSTRAP_UNAVAILABLE')
+        wait = min(poll_ms, remaining)
+        page.wait_for_timeout(wait)
+        remaining -= wait
+
+
 class BoundedClient(Client):
+    def __init__(self, *args, bootstrap_data, **kwargs):
+        self._browser_bootstrap = validated_bootstrap(bootstrap_data)
+        super().__init__(*args, **kwargs)
+
     def get_global_data(self):
-        # Bound authentication/bootstrap requests as well as subsequent RPCs.
+        # Reuse tokens from the same browser that exported the cookies. Avoid
+        # a second requests-only HTML login/bootstrap parse with xpath(...)[0].
         self.session.request = functools.partial(self.session.request, timeout=(30, 120))
-        return super().get_global_data()
+        return dict(self._browser_bootstrap)
 
 
 class WebBackup:
@@ -279,6 +326,10 @@ class WebBackup:
                 if self.e.stats['attempted'] % 10 == 0:
                     self.e.flush()
         self.e.flush()
+        self.report(inventory_error, probe)
+        return int(inventory_error or self.e.stats['errors'] > 0)
+
+    def report(self, inventory_error=False, probe=False):
         counts = dict(self.db.execute('SELECT status,COUNT(*) FROM media GROUP BY status').fetchall())
         complete = not bool(self.db.execute('SELECT 1 FROM web_tasks WHERE done=0').fetchone()) and not inventory_error
         report = {**self.e.stats, 'inventory_complete': complete, 'inventory_error': inventory_error,
@@ -289,7 +340,7 @@ class WebBackup:
                   'album_memberships': self.db.execute('SELECT COUNT(*) FROM web_album_items').fetchone()[0],
                   'probe': probe, 'status': 'PARTIAL' if inventory_error or self.e.stats['errors'] else 'PAUSED'}
         print('WEB_SUMMARY=' + json.dumps(report), flush=True)
-        return int(inventory_error or self.e.stats['errors'] > 0)
+        return report
 
 
 def main():
@@ -309,22 +360,35 @@ def main():
     a.root, a.sroot = 'koofr_remote:/Google Photos/Photos', 'koofr_remote:/Google Photos/.gphotos-sync'
     e = Engine(a)
     cookie_path = e.sd / 'web-cookies.txt'
+    web = None
+    stage = 'manifest_schema'
     try:
+        web = WebBackup(e, None)
+        stage = 'browser_bootstrap'
         with sync_playwright() as pw:
             context = pw.chromium.launch_persistent_context(a.profile, executable_path=a.chrome, headless=True, args=['--disable-dev-shm-usage','--no-first-run'])
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto('https://photos.google.com/', wait_until='domcontentloaded', timeout=90000)
-                page.wait_for_timeout(3000)
+                bootstrap = browser_bootstrap(page)
                 export_cookies(context, cookie_path)
             finally:
                 context.close()
         # gpwc logs the account email at INFO. Disable before constructing it.
         logging.disable(logging.CRITICAL)
-        client = BoundedClient(cookie_path, log_level='CRITICAL')
-        return WebBackup(e, client).run(a.scan_seconds, a.probe)
+        stage = 'web_client'
+        client = BoundedClient(cookie_path, bootstrap_data=bootstrap, log_level='CRITICAL')
+        stage = 'inventory_and_upload'
+        web.client = client
+        return web.run(a.scan_seconds, a.probe)
     except Exception as exc:
-        print('WEB_FATAL type=' + type(exc).__name__, flush=True)
+        print('WEB_FATAL type=' + type(exc).__name__ + ' stage=' + stage, flush=True)
+        # Frame metadata only: never exception text, locals, cookies or DOM.
+        frames = [{'file': Path(f.filename).name, 'line': f.lineno, 'function': f.name}
+                  for f in traceback.extract_tb(exc.__traceback__)[-6:]]
+        print('WEB_FATAL_FRAMES=' + json.dumps(frames), flush=True)
+        if web is not None:
+            web.report(inventory_error=True, probe=a.probe)
         return 1
     finally:
         cookie_path.unlink(missing_ok=True)

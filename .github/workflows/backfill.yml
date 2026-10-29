@@ -27,7 +27,8 @@ jobs:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      MAX_RUNTIME_SECONDS: "18000"
+      # Manual max_items=1 is a bounded canary; scheduled runs retain 5h.
+      MAX_RUNTIME_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.max_items == '1' && '900' || '18000' }}
       MAX_ITEMS: ${{ inputs.max_items || '10000' }}
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +81,15 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s 18300s \
-            python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
+          SCAN_SECONDS=600
+          WATCHDOG_SECONDS=18300
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$MAX_ITEMS" = 1 ]; then
+            SCAN_SECONDS=30
+            WATCHDOG_SECONDS=930
+            echo "BACKFILL_CANARY max_items=1 runtime_seconds=900 scan_seconds=30"
+          fi
+          timeout --signal=INT --kill-after=30s "${WATCHDOG_SECONDS}s" \
+            python3 -m src.gphotos_web_backup --scan-seconds "$SCAN_SECONDS" --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()
         shell: bash
@@ -89,6 +97,10 @@ jobs:
           set -euo pipefail
           if [ ! -d "$HOME/gphotos-profile" ] || ! command -v rclone >/dev/null; then
             echo "No worker profile to persist"
+            exit 0
+          fi
+          if ! grep -qx "WEB_BOOTSTRAP_STATUS=READY" "$RUNNER_TEMP/gphotos-backfill.log"; then
+            echo "PROFILE_PERSIST_SKIPPED: browser bootstrap not verified; original encrypted profile preserved"
             exit 0
           fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"

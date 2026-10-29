@@ -9,7 +9,9 @@ import time
 import urllib.error
 import urllib.request
 
-REPO='hunghvt-cyber/google-photos-koofr'
+REPO='hunghvt-cyber/backup-drive'
+# Keep public snapshot links stable for existing readers and idempotent replay.
+REPORT_REPO='hunghvt-cyber/google-photos-koofr'
 BRANCH='reports/backfill'
 REPORT_PATH='backfill-latest.json'
 COUNTS={'uploaded_total':'manifest_uploaded_total','pending_seen':'pending_seen','pending_errors':'pending_errors',
@@ -42,7 +44,7 @@ def normalize(health,run,outcome):
     metrics['inventory_complete']=health['inventory_complete']
     if metrics['uploaded_this_run']+metrics['errors_this_run']>metrics['attempted_this_run']:raise ValueError('INCONSISTENT_COUNTS')
     return dict(schema_version=1,source='gphotos-backfill',run_id=run['id'],run_number=run['run_number'],
-                run_attempt=run['run_attempt'],run_url=f'https://github.com/{REPO}/actions/runs/{run["id"]}',
+                run_attempt=run['run_attempt'],run_url=f'https://github.com/{REPORT_REPO}/actions/runs/{run["id"]}',
                 source_sha=run['head_sha'],measured_at=measured,outcome=outcome,metrics=metrics)
 
 

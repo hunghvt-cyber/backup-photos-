@@ -37,6 +37,10 @@ class BootstrapTests(unittest.TestCase):
         for invalid in [None,{},dict(bootstrap(),Im6cmf='//evil.invalid'),dict(bootstrap(),FdrFJe=1)]:
             with self.assertRaisesRegex(RuntimeError,'WEB_BOOTSTRAP_INCOMPLETE'):validated_bootstrap(invalid)
 
+    def test_account_display_field_is_optional_for_rpc_bootstrap(self):
+        data=bootstrap();del data['oPEP7c']
+        self.assertEqual(validated_bootstrap(data)['oPEP7c'],'redacted')
+
     def test_client_reuses_tokens_without_second_html_fetch(self):
         with tempfile.TemporaryDirectory() as temp:
             cookies=Path(temp)/'cookies.txt';cookies.write_text('# Netscape HTTP Cookie File\n');cookies.chmod(0o600)

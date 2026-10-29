@@ -61,7 +61,7 @@ class DownloadError(RuntimeError):
     """Safe diagnostic code without URLs or credentials."""
 
 
-BOOTSTRAP_KEYS = ('FdrFJe', 'cfb2h', 'SNlM0e', 'Im6cmf', 'oPEP7c')
+BOOTSTRAP_KEYS = ('FdrFJe', 'cfb2h', 'SNlM0e', 'Im6cmf')
 
 
 def validated_bootstrap(value):
@@ -70,12 +70,14 @@ def validated_bootstrap(value):
         raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
     if not value['Im6cmf'].startswith('/') or value['Im6cmf'].startswith('//'):
         raise RuntimeError('WEB_BOOTSTRAP_INCOMPLETE')
-    return {key: value[key] for key in BOOTSTRAP_KEYS}
+    return {**{key: value[key] for key in BOOTSTRAP_KEYS},
+            'oPEP7c': value.get('oPEP7c') if isinstance(value.get('oPEP7c'), str) else 'redacted'}
 
 
 def browser_bootstrap(page, timeout_ms=30000, poll_ms=500):
     """Read the existing browser session, independent of media-tile selectors."""
     remaining = timeout_ms
+    value = None
     while True:
         host = (urlparse(page.url).hostname or '').lower()
         if host in ('accounts.google.com', 'consent.google.com'):
@@ -92,6 +94,11 @@ def browser_bootstrap(page, timeout_ms=30000, poll_ms=500):
                 print('WEB_BOOTSTRAP_STATUS=READY', flush=True)
                 return result
         if remaining <= 0:
+            diagnostic = {'photos_host': host == 'photos.google.com',
+                          'global_present': isinstance(value, dict),
+                          'field_types': {k: type(value.get(k)).__name__ if isinstance(value, dict) else 'absent'
+                                          for k in BOOTSTRAP_KEYS}}
+            print('WEB_BOOTSTRAP_DIAGNOSTIC=' + json.dumps(diagnostic), flush=True)
             print('WEB_BOOTSTRAP_STATUS=UNAVAILABLE', flush=True)
             raise RuntimeError('WEB_BOOTSTRAP_UNAVAILABLE')
         wait = min(poll_ms, remaining)

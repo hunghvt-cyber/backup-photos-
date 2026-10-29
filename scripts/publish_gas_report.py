@@ -17,9 +17,16 @@ from urllib.parse import urlparse
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 SOURCES = {
+    'hunghvt-cyber/backup-photos': ('gdrive', 'gdrive-koofr', 'bisync.yml'),
+    'hunghvt-cyber/backup-drive': ('gphotos', 'gphotos-koofr', 'daily.yml'),
     'hunghvt-cyber/my-backup-gdrive-koofr': ('gdrive', 'gdrive-koofr', 'bisync.yml'),
     'hunghvt-cyber/google-photos-koofr': ('gphotos', 'gphotos-koofr', 'daily.yml'),
 }
+# Keep the deployed GAS/reader contract stable: old GitHub names redirect to
+# the same verified repositories. Validate actual workflow identity BEFORE
+# translating this public link; never accept arbitrary repo or workflow names.
+WIRE_REPOS = {'gdrive': 'hunghvt-cyber/my-backup-gdrive-koofr',
+              'gphotos': 'hunghvt-cyber/google-photos-koofr'}
 MAX_INT = 9007199254740991
 
 
@@ -81,7 +88,8 @@ def normalize(report, env):
     warnings = ['Có shortcut bị hỏng.'] if source == 'gdrive' else ['Backup chưa hoàn tất hoặc có lỗi; xem GitHub Actions.']
     if not isinstance(report['warnings'], list) or len(report['warnings']) > 4 or any(x not in warnings for x in report['warnings']):
         raise ValueError('INVALID_REPORT_WARNINGS')
-    return source, {**report, **ids}
+    return source, {**report, **ids,
+                    'run_url': 'https://github.com/'+WIRE_REPOS[source]+'/actions/runs/'+str(ids['run_id'])}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -155,7 +163,8 @@ SAFE_ERRORS = frozenset(('ACK_UNSIGNED','ACK_INVALID','ACK_WRONG_REQUEST','ACK_W
     'AUTH_DENIED','NOT_CONFIGURED','BUSY','REQUEST_EXPIRED','REPORT_REJECTED',
     'STALE_REPORT','REPORT_CONFLICT','RUN_ID_MISMATCH','IDEMPOTENCY_MISMATCH',
     'INVALID_REPORT_KEY','INVALID_REPORT_URL','REPORT_HTTP_FAILED','REPORT_REDIRECT_FORBIDDEN',
-    'REPORT_RESPONSE_TOO_LARGE','INVALID_BACKUP_REPORT'))
+    'REPORT_RESPONSE_TOO_LARGE','INVALID_BACKUP_REPORT',
+    'UNAPPROVED_REPOSITORY','UNAPPROVED_WORKFLOW','INVALID_REPORT_IDENTITY'))
 
 def safe_error(error):
     return str(error) if str(error) in SAFE_ERRORS else 'REQUEST_FAILED'

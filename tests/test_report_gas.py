@@ -36,6 +36,35 @@ class BackupPublisherTests(unittest.TestCase):
             self.assertEqual(actual,source);self.assertEqual(normalized['run_number'],3);self.assertEqual(normalized['run_attempt'],2)
             self.assertNotIn('run_number',report)
 
+    def test_renamed_repos_preserve_deployed_wire_contract(self):
+        for source, current in [('gdrive','backup-photos'), ('gphotos','backup-drive')]:
+            report,env=fixture(source)
+            old_url=report['run_url'];old_repo=env['GITHUB_REPOSITORY']
+            repo='hunghvt-cyber/'+current
+            env['GITHUB_REPOSITORY']=repo
+            env['GITHUB_WORKFLOW_REF']=env['GITHUB_WORKFLOW_REF'].replace(old_repo,repo)
+            report['run_url']=report['run_url'].replace(old_repo,repo)
+            actual,normalized=normalize(report,env)
+            self.assertEqual(actual,source)
+            self.assertEqual(normalized['run_url'],old_url)
+            sent=[]
+            def request(url,body):
+                sent.append(body);return ack(body)
+            self.assertTrue(publish(report,env,request=request)['published'])
+            self.assertEqual(len(sent),1)
+            env['GITHUB_WORKFLOW_REF']=env['GITHUB_WORKFLOW_REF'].replace('.yml','.wrong.yml')
+            with self.assertRaisesRegex(ValueError,'UNAPPROVED_WORKFLOW'):normalize(report,env)
+
+    def test_unapproved_repo_and_cross_source_are_rejected_before_network(self):
+        report,env=fixture()
+        with self.assertRaisesRegex(ValueError,'UNAPPROVED_REPOSITORY'):
+            publish(report,{**env,'GITHUB_REPOSITORY':'other/backup-photos'},request=lambda *a:self.fail('network'))
+        report,env=fixture('gphotos')
+        env['GITHUB_REPOSITORY']='hunghvt-cyber/backup-photos'
+        env['GITHUB_WORKFLOW_REF']='hunghvt-cyber/backup-photos/.github/workflows/bisync.yml@refs/heads/main'
+        report['run_url']='https://github.com/hunghvt-cyber/backup-photos/actions/runs/101'
+        with self.assertRaisesRegex(ValueError,'INVALID_REPORT_IDENTITY'):normalize(report,env)
+
     def test_private_fields_wrong_run_and_backfill_are_rejected(self):
         report,env=fixture()
         for invalid in ({**report,'private_path':'private'}, {**report,'run_id':102}, {**report,'warnings':['private filename']}):
@@ -81,4 +110,5 @@ class BackupPublisherTests(unittest.TestCase):
     def test_diagnostics_never_echo_unknown_exception_or_secret(self):
         from publish_gas_report import safe_error
         self.assertEqual(safe_error(ValueError('AUTH_DENIED')), 'AUTH_DENIED')
+        self.assertEqual(safe_error(ValueError('UNAPPROVED_REPOSITORY')), 'UNAPPROVED_REPOSITORY')
         self.assertEqual(safe_error(ValueError('private '+KEY)), 'REQUEST_FAILED')

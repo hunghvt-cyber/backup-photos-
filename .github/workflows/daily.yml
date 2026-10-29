@@ -91,6 +91,10 @@ jobs:
             echo "No worker profile to persist"
             exit 0
           fi
+          if grep -Eq "^PHOTOS_LIBRARY_STATUS=(AUTH_REQUIRED|CONSENT_REQUIRED|GALLERY_NOT_READY)$" "$RUNNER_TEMP/gphotos-daily.log"; then
+            echo "PROFILE_PERSIST_SKIPPED: library readiness failed; original encrypted profile preserved"
+            exit 0
+          fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
           # Browser caches are disposable, but auth cookies/storage are not.
           # Excluding caches reduces the encrypted profile uploaded to Koofr

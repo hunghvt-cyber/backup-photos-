@@ -1,11 +1,32 @@
 from __future__ import annotations
 import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, sys, time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 SEL='a[href*="/photo/"],a[href*="/video/"]'; ID=re.compile(r'/(photo|video)/([^/?#]+)')
 VIDATE=re.compile(r'(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\s+thg\s+(\d{1,2}),\s*(\d{4})',re.I)
+def wait_for_library(page, timeout_ms=30000, poll_ms=500):
+ """Bounded gallery readiness check; never log account URLs or private DOM."""
+ if timeout_ms < 0 or poll_ms <= 0:raise ValueError('INVALID_LIBRARY_WAIT')
+ remaining=timeout_ms
+ while True:
+  host=(urlsplit(page.url).hostname or '').lower()
+  if host=='accounts.google.com':status='AUTH_REQUIRED'
+  elif host=='consent.google.com':status='CONSENT_REQUIRED'
+  else:status=None
+  if status:
+   print('PHOTOS_LIBRARY_STATUS='+status,flush=True)
+   raise RuntimeError('GOOGLE_PHOTOS_'+status)
+  if host=='photos.google.com' and page.locator(SEL).count()>0:
+   print('PHOTOS_LIBRARY_STATUS=READY',flush=True)
+   return
+  if remaining<=0:
+   print('PHOTOS_LIBRARY_STATUS=GALLERY_NOT_READY',flush=True)
+   raise RuntimeError('GOOGLE_PHOTOS_GALLERY_NOT_READY')
+  wait=min(poll_ms,remaining);page.wait_for_timeout(wait);remaining-=wait
+
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def cmd(*a,ok=True,cap=False): return subprocess.run(a,check=ok,text=True,capture_output=cap)
 def savej(p,d):
@@ -208,8 +229,8 @@ class Engine:
  def scan(self,pw):
   c=pw.chromium.launch_persistent_context(user_data_dir=self.a.profile,executable_path=self.a.chrome,headless=True,args=['--disable-dev-shm-usage','--no-first-run']);p=c.pages[0] if c.pages else c.new_page()
   try:
-   p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000);p.wait_for_timeout(4000)
-   if p.locator(SEL).count()==0:raise RuntimeError('Google Photos session unavailable')
+   p.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=120000)
+   wait_for_library(p)
    # Collect every intermediate viewport instead of jumping straight to End.
    # Reopen Chrome between batches so item downloads can use the same profile.
    from src.gphotos_backfill_grid import advance_gallery

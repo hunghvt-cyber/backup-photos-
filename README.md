@@ -1,3 +1,5 @@
+> 29/10: [backup/report recovery](docs/BACKUP-REPORT-RECOVERY-20261029.md) — canonical repo names, compatible GAS reports and guarded runtime fixes; live validation remains separate.
+
 > Backfill progress 22/10: [nhánh báo cáo riêng cho Homepage](docs/BACKFILL-PROGRESS-20261022.md). Daily vẫn qua GAS; Backfill chỉ xuất aggregate sau khi chốt lượt, không gửi giả Daily.
 
 > 22/10: [video gốc và nhận diện nội dung](docs/VIDEO-ORIGINAL-IDENTITY-20261022.md). Ba MP4 nhỏ thực chất là WebP preview; không đổi tên thành ảnh. Bản sửa lấy đúng Download và xác minh trước khi lưu thành công.

@@ -3,7 +3,7 @@ from scripts.publish_backfill_progress import normalize,is_newer
 
 class ProgressTests(unittest.TestCase):
     def setUp(self):
-        self.run=dict(repository={'full_name':'hunghvt-cyber/google-photos-koofr'},head_branch='main',path='.github/workflows/backfill.yml',id=100,run_number=15,run_attempt=1,head_sha='a'*40,created_at='2026-10-20T00:00:00Z')
+        self.run=dict(repository={'full_name':'hunghvt-cyber/backup-drive'},head_branch='main',path='.github/workflows/backfill.yml',id=100,run_number=15,run_attempt=1,head_sha='a'*40,created_at='2026-10-20T00:00:00Z')
         self.health=dict(generated_at_utc='2026-10-20T05:00:00Z',manifest_uploaded_total=1000,pending_seen=2000,pending_errors=3,inventoried_total=3000,albums=49,album_memberships=1234,attempted=11,uploaded=10,errors=1,inventory_complete=False,raw_cookie='must not leak')
     def test_filtered_partial_progress_without_complete_backup_claim(self):
         report=normalize(self.health,self.run,'failure')
@@ -32,7 +32,7 @@ class ProgressTests(unittest.TestCase):
 class CallbackTests(unittest.TestCase):
     setUp=ProgressTests.setUp
     def env(self):
-        return dict(GITHUB_REPOSITORY='hunghvt-cyber/google-photos-koofr',GITHUB_WORKFLOW_REF='hunghvt-cyber/google-photos-koofr/.github/workflows/backfill-progress.yml@refs/heads/main',GITHUB_EVENT_NAME='workflow_run',ORIGINAL_RUN_ID='100',GITHUB_RUN_ID='999')
+        return dict(GITHUB_REPOSITORY='hunghvt-cyber/backup-drive',GITHUB_WORKFLOW_REF='hunghvt-cyber/backup-drive/.github/workflows/backfill-progress.yml@refs/heads/main',GITHUB_EVENT_NAME='workflow_run',ORIGINAL_RUN_ID='100',GITHUB_RUN_ID='999')
     def test_callback_uses_completed_source_identity_not_its_own_run(self):
         import json
         from unittest.mock import patch
@@ -54,5 +54,27 @@ class CallbackTests(unittest.TestCase):
         with patch.dict('os.environ',{**self.env(),'GITHUB_EVENT_NAME':'pull_request'},clear=True),patch('scripts.publish_backfill_progress.api') as api:
             with self.assertRaisesRegex(ValueError,'WRONG_WORKFLOW'):main()
         api.assert_not_called()
+
+
+class RenameSafetyTests(unittest.TestCase):
+    def test_old_callback_repo_is_not_implicitly_trusted(self):
+        from unittest.mock import patch
+        from scripts.publish_backfill_progress import main
+        env=CallbackTests().env()
+        for changed in [
+            {'GITHUB_REPOSITORY':'hunghvt-cyber/google-photos-koofr'},
+            {'GITHUB_WORKFLOW_REF':'hunghvt-cyber/backup-drive/.github/workflows/daily.yml@refs/heads/main'}]:
+            with patch.dict('os.environ',{**env,**changed},clear=True),patch('scripts.publish_backfill_progress.api') as api:
+                with self.assertRaisesRegex(ValueError,'WRONG_WORKFLOW'):main()
+            api.assert_not_called()
+
+    def test_canonical_source_preserves_snapshot_link_contract(self):
+        fixture=ProgressTests();fixture.setUp()
+        report=normalize(fixture.health,fixture.run,'failure')
+        self.assertEqual(report['run_url'],'https://github.com/hunghvt-cyber/google-photos-koofr/actions/runs/100')
+        self.assertEqual(report['measured_at'],fixture.health['generated_at_utc'])
+        self.assertFalse(is_newer(report,dict(report)))
+        fixture.run['repository']['full_name']='hunghvt-cyber/backup-photos'
+        with self.assertRaisesRegex(ValueError,'UNVERIFIED_BACKFILL_RUN'):normalize(fixture.health,fixture.run,'failure')
 
 if __name__=='__main__':unittest.main()

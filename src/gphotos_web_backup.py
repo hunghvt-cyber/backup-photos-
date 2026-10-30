@@ -214,6 +214,12 @@ class WebBackup:
                               'original_quality_batch': getattr(match,'is_original_quality',None)}
                     values = {key: value if isinstance(value,(int,float,bool)) else None for key,value in values.items()}
                     print('ORIGINAL_BATCH_METADATA_DIAGNOSTIC=' + json.dumps(values), flush=True)
+                    raw = execute(self.client, payloads.GetItemInfoExt(media_key=media_id, parse_response=False))
+                    try:
+                        quality_code = raw[0][30][2]
+                    except (IndexError,KeyError,TypeError):
+                        quality_code = None
+                    print('ORIGINAL_QUALITY_CODE=' + json.dumps(quality_code if type(quality_code) is int else None), flush=True)
                 except Exception as exc:
                     print('ORIGINAL_BATCH_METADATA_UNAVAILABLE type=' + type(exc).__name__, flush=True)
         name = Path(ext.file_name or '').name

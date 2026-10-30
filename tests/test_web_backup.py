@@ -24,6 +24,23 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_zip_original_member_size_and_path_are_strict(self):
+        import zipfile
+        archive = Path(self.tmp.name) / 'original.zip'
+        dst = Path(self.tmp.name) / 'result.jpg'
+        for names, expected, succeeds in [(['file.jpg'], 8, True), (['file.jpg'], 9, False),
+                                          (['../file.jpg'], 8, False), (['file.jpg','extra.jpg'], 8, False)]:
+            with zipfile.ZipFile(archive, 'w') as zipped:
+                for name in names:
+                    zipped.writestr(name, b'original')
+            if succeeds:
+                self.web.unpack_original(archive, dst, 'file.jpg', expected)
+                self.assertEqual(dst.read_bytes(), b'original')
+            else:
+                with self.assertRaises(RuntimeError):
+                    self.web.unpack_original(archive, dst, 'file.jpg', expected)
+                self.assertFalse(dst.exists())
+
     def test_browser_original_checks_exact_source_size_and_cleans_mismatch(self):
         self.e.db.touch('failed', 'photo', 'https://photos.google.com/photo/failed', None, None)
         path = Path(self.tmp.name) / 'download.jpg'

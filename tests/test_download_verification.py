@@ -52,6 +52,17 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(rpc.call_args.args[1].rpcid, 'pLFTfd')
         self.assertEqual(w.client.session.get.call_count, 2)
 
+    def test_alternate_metadata_url_is_size_checked_before_rpc_fallback(self):
+        w = self.web([self.response(b'bad'),self.response(b'original')])
+        metadata = [NS(download_original_url='https://lh3.googleusercontent.com/preferred',
+                       download_url='https://lh3.googleusercontent.com/alternate'),
+                    NS(file_name='photo.jpg',size=8)]
+        with patch('src.gphotos_web_backup.execute',side_effect=metadata) as rpc:
+            path, _ = w.download(None,'','media')
+        self.assertEqual(path.read_bytes(),b'original')
+        self.assertEqual(rpc.call_count,2)
+        self.assertEqual(w.client.session.get.call_args.args[0],'https://lh3.googleusercontent.com/alternate')
+
     def test_both_routes_wrong_size_leave_no_file(self):
         w = self.web([self.response(b'bad'), self.response(b'bad')])
         output = io.StringIO()

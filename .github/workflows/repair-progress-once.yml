@@ -1,0 +1,43 @@
+name: Temporary read-only repair progress
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/repair-progress-once.yml']
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.event.head_commit.message == 'Read private repair progress once 20261031'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+    steps:
+      - name: Read aggregate repair progress without changing Koofr
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          WORK="$(mktemp -d)"
+          trap 'rm -rf -- "$WORK"; rm -f -- "$HOME/.config/rclone/rclone.conf"' EXIT
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone
+          mkdir -p "$HOME/.config/rclone"
+          PASS="$(rclone obscure "$KOOFR_APP_PASSWORD")"
+          printf '[koofr_remote]\ntype = webdav\nurl = https://app.koofr.net/dav/Koofr\nvendor = other\nuser = %s\npass = %s\n' "$KOOFR_USER" "$PASS" > "$HOME/.config/rclone/rclone.conf"
+          timeout 90s rclone copyto 'koofr_remote:/Google Photos/.gphotos-sync/manifest.sqlite' "$WORK/manifest.sqlite" --retries 1 --low-level-retries 1 --contimeout 10s --timeout 30s
+          python3 - "$WORK/manifest.sqlite" <<'PY'
+          import sqlite3, sys, json
+          from pathlib import Path
+          with sqlite3.connect(Path(sys.argv[1]).as_uri()+'?mode=ro', uri=True) as db:
+              assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
+              counts = dict(db.execute('SELECT status,COUNT(*) FROM media GROUP BY status'))
+              progress = db.execute("SELECT COUNT(*),MAX(last_attempt) FROM web_items WHERE last_attempt>='2026-10-30T21:07:24'").fetchone()
+              groups = {}
+              codes = ('ORIGINAL_SIZE_MISMATCH','ORIGINAL_FILENAME_MISSING','ORIGINAL_URL_MISSING','ORIGINAL_ZIP_TOKEN_UNAVAILABLE','ORIGINAL_ZIP_NOT_READY','ORIGINAL_ZIP_SIZE_UNAVAILABLE','ORIGINAL_ZIP_CONTENT_UNEXPECTED','ORIGINAL_SIZE_UNAVAILABLE','REMOTE_SIZE_UNCONFIRMED','REMOTE_EXISTENCE_UNCONFIRMED','ConnectionError','HTTPError','Timeout','RuntimeError','IMAGE_PREVIEW_INSTEAD_OF_VIDEO','INVALID_OR_STILL_IMAGE_VIDEO')
+              for (error,) in db.execute("SELECT last_error FROM media WHERE status='error'"):
+                  code = next((c for c in codes if c.lower() in (error or '').lower()),'OTHER')
+                  groups[code] = groups.get(code,0)+1
+              print('READ_ONLY_REPAIR_PROGRESS='+json.dumps({'counts':counts,'attempts_checkpointed_since_batch_start':progress[0],'last_attempt_utc':progress[1],'error_categories':groups}))
+          PY

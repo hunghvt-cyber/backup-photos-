@@ -24,6 +24,31 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_retry_only_preserves_inventory_and_ignores_seen_rows(self):
+        self.e.a = NS(maxitems=10)
+        self.e.stats.update(uploaded=0, skipped=0)
+        for key in ('failed', 'pending'):
+            self.e.db.touch(key, 'photo', 'url', None, None)
+            self.e.db.c.execute("INSERT INTO web_items VALUES(?,NULL,NULL)", (key,))
+        self.e.db.err('failed', 'ORIGINAL_SIZE_MISMATCH https://private.invalid/token')
+        self.e.db.c.commit()
+        before = self.e.db.c.execute('SELECT * FROM web_tasks').fetchall()
+        def one(unused, key, *args, **kwargs):
+            self.e.stats['attempted'] += 1
+            self.e.stats['uploaded'] += 1
+            self.e.db.done(key, 'file.jpg', 8, 'hash', 'remote')
+        self.e.one = MagicMock(side_effect=one)
+        from contextlib import redirect_stdout
+        import io
+        output = io.StringIO()
+        with patch.dict('os.environ', {'WEB_RETRY_ONLY': '1'}), patch.object(self.web, 'inventory') as inventory, redirect_stdout(output):
+            self.assertEqual(self.web.run(600), 0)
+        inventory.assert_not_called()
+        self.assertEqual(self.e.one.call_args.args[1], 'failed')
+        self.assertEqual(self.e.db.c.execute('SELECT * FROM web_tasks').fetchall(), before)
+        self.assertIn('"total": 0', output.getvalue())
+        self.assertNotIn('private.invalid', output.getvalue())
+
     def test_archive_library_albums_and_existing_uploaded_preserved(self):
         self.e.db.touch('same', 'photo', 'old', None, None)
         self.e.db.done('same', 'x.jpg', 1, 'hash', 'remote')

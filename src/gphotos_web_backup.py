@@ -225,7 +225,27 @@ class WebBackup:
                     dst.unlink(missing_ok=True)
             if route == 0:
                 print('ORIGINAL_FALLBACK reason=' + str(last_error), flush=True)
+        if os.environ.get('WEB_BROWSER_REPAIR') == '1':
+            print('ORIGINAL_BROWSER_FALLBACK=START', flush=True)
+            return self.browser_original(media_id, ext.size)
         raise last_error or DownloadError('ORIGINAL_URL_MISSING')
+
+    def browser_original(self, media_id, expected_size):
+        if type(expected_size) is not int or expected_size <= 0:
+            raise DownloadError('ORIGINAL_SIZE_UNAVAILABLE')
+        row = self.db.execute('SELECT url FROM media WHERE id=?', (media_id,)).fetchone()
+        if not row or not row[0].startswith('https://photos.google.com/'):
+            raise DownloadError('ORIGINAL_PAGE_UNAVAILABLE')
+        with sync_playwright() as pw:
+            path, name = Engine.download(self.e, pw, row[0], media_id)
+        actual = path.stat().st_size
+        if actual != expected_size:
+            print('ORIGINAL_SIZE_DIAGNOSTIC=' + json.dumps({'route': 'browser',
+                  'expected_bytes': expected_size, 'actual_bytes': actual}), flush=True)
+            path.unlink(missing_ok=True)
+            raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+        print('ORIGINAL_BROWSER_FALLBACK=VERIFIED_SIZE', flush=True)
+        return path, name
 
     def fetch_original(self, original, dst, expected_size, route=0):
         def allowed(url):

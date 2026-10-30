@@ -189,6 +189,13 @@ class Engine:
    line=result.stdout.strip() if result.returncode==0 else ''
    try:actual=int(line.split()[0]) if line else None
    except (ValueError,IndexError):actual=None
+   if actual is None:
+    stat=cmd('rclone','lsjson','--stat',remote,'--retries','1','--low-level-retries','1','--contimeout','10s','--timeout','20s',ok=False,cap=True)
+    try:
+     data=json.loads(stat.stdout) if stat.returncode==0 else None
+     if isinstance(data,dict) and data.get('IsDir') is False and type(data.get('Size')) is int and data['Size']>=0:actual=data['Size']
+    except (ValueError,TypeError):pass
+    print('REMOTE_STAT_DIAGNOSTIC='+json.dumps({'lsl_rc':result.returncode,'lsl_stdout_bytes':len(result.stdout),'stat_rc':stat.returncode,'size_available':actual is not None}),flush=True)
    if actual==expected:return
    if actual is not None:
     raise RuntimeError(f'size mismatch {expected}!={actual}')

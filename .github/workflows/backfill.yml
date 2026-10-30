@@ -1,6 +1,9 @@
 name: Google Photos Historical Backfill
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/backfill.yml']
   workflow_dispatch:
     inputs:
       recovery_profile:
@@ -119,7 +122,7 @@ jobs:
           rm -f -- "$HOME/.config/rclone/rclone.conf"
           echo 'RECOVERY_PLAINTEXT_LOCAL_CLEANUP=PASS'
   backfill:
-    if: ${{ !inputs.recovery_profile }}
+    if: ${{ (github.event_name != 'push' && !inputs.recovery_profile) || (github.event_name == 'push' && github.event.head_commit.message == 'Repair remaining 194 failed media once 20261031') }}
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
     timeout-minutes: 330
@@ -127,12 +130,12 @@ jobs:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      WEB_RETRY_ONLY: ${{ inputs.repair_errors && '1' || '0' }}
+      WEB_RETRY_ONLY: '1'
       WEB_REPAIR_SAMPLE: '0'
       WEB_BROWSER_REPAIR: '0'
-      WEB_ZIP_REPAIR: ${{ inputs.repair_errors && '1' || '0' }}
+      WEB_ZIP_REPAIR: '1'
       MAX_RUNTIME_SECONDS: "18000"
-      MAX_ITEMS: ${{ inputs.max_items || '10000' }}
+      MAX_ITEMS: ${{ inputs.max_items || '194' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and configure runtime

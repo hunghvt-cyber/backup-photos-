@@ -227,21 +227,28 @@ class WebBackup:
             raise DownloadError('ORIGINAL_FILENAME_MISSING')
         dst = self.e.wd / (media_id + '__' + name)
         original = info.download_original_url or (info.download_url if ext.size else None)
+        metadata_urls = [original]
+        alternate = getattr(info, 'download_url', None)
+        if alternate and alternate != original and ext.size:
+            metadata_urls.append(alternate)
         last_error = None
         # Try the signed original RPC after a rejected metadata URL as well as
         # when that URL is absent. Never relax source-size verification.
-        for route in range(2):
+        for route in range(len(metadata_urls) + 1):
             if self.e.left() < 180:
                 raise DownloadError('STOP_RESERVE')
-            if route == 1:
+            if route == len(metadata_urls):
                 request = payloads.GetUnsupportedVideoDownloadUrl(media_keys=[media_id], parse_response=False)
                 request.data = [[media_id], [1]]
                 original = first_https(execute(self.client, request))
+            else:
+                original = metadata_urls[route]
             if not original:
                 last_error = DownloadError('ORIGINAL_URL_MISSING')
                 continue
             try:
-                self.fetch_original(original, dst, ext.size, route=route)
+                route_name = 0 if route == 0 else ('alternate_metadata' if route < len(metadata_urls) else 1)
+                self.fetch_original(original, dst, ext.size, route=route_name)
                 last_error = None
                 return dst, name
             except DownloadError as exc:

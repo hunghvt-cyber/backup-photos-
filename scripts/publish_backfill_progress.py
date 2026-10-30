@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-REPO='hunghvt-cyber/backup-drive'
+REPO='hunghvt-cyber/backup-photos-'
 # Keep public snapshot links stable for existing readers and idempotent replay.
 REPORT_REPO='hunghvt-cyber/google-photos-koofr'
 BRANCH='reports/backfill'

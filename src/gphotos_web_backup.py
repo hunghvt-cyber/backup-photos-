@@ -389,7 +389,12 @@ class WebBackup:
             label = control.get_attribute('aria-label') or control.inner_text()
             normalized = unicodedata.normalize('NFKD',label).encode('ascii','ignore').decode().lower()
             normalized = ' '.join(normalized.split())
-            if any(normalized == name or (prefix and normalized.startswith(name + ' ')) for name in labels):
+            recognized = any(normalized == name or (prefix and normalized.startswith(name + ' ')) for name in labels)
+            words = normalized.split()
+            if prefix and words and ((words[0] == 'tai' and ('goc' in words or 'raw' in words)) or
+                                     (words[0] == 'download' and ('original' in words or 'raw' in words))):
+                recognized = True
+            if recognized:
                 matches.append(control)
         return matches[0] if len(matches) == 1 else None
 

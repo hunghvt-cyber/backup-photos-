@@ -199,7 +199,10 @@ class WebBackup:
                       'stored_bytes_ext': getattr(ext,'space_taken',None),
                       'original_quality_info': getattr(info,'is_original_quality',None),
                       'original_quality_ext': getattr(ext,'is_original_quality',None),
-                      'motion_duration': getattr(info,'live_photo_duration',None)}
+                      'motion_duration': getattr(info,'live_photo_duration',None),
+                      'shared_source': any(value in ('shared','partnerShared') for value in (getattr(ext,'source',None) or [])),
+                      'original_url_available': bool(getattr(info,'download_original_url',None)),
+                      'motion_url_available': bool(getattr(info,'live_photo_video_download_url',None))}
             values = {key: value if isinstance(value,(int,float,bool)) else None for key,value in values.items()}
             print('ORIGINAL_METADATA_DIAGNOSTIC=' + json.dumps(values), flush=True)
             if os.environ.get('WEB_REPAIR_METADATA_BATCH') == '1':

@@ -1,3 +1,5 @@
+> 30/10: [profile recovery verified](docs/PROFILE-RECOVERY-20261030.md) — existing key, encrypted fallback preserved, plaintext staging removed, fresh-runner canary 3/3 uploaded; normal daily Backfill restored. Full library backup remains incomplete.
+
 > 29/10: [backup/report recovery](docs/BACKUP-REPORT-RECOVERY-20261029.md) — canonical repo names, compatible GAS reports and guarded runtime fixes; live validation remains separate.
 
 > Backfill progress 22/10: [nhánh báo cáo riêng cho Homepage](docs/BACKFILL-PROGRESS-20261022.md). Daily vẫn qua GAS; Backfill chỉ xuất aggregate sau khi chốt lượt, không gửi giả Daily.

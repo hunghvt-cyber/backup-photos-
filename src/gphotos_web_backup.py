@@ -193,6 +193,15 @@ class WebBackup:
         row = self.db.execute('SELECT album FROM web_items WHERE id=?', (media_id,)).fetchone()
         info = execute(self.client, payloads.GetItemInfo(media_key=media_id, album_media_key=row[0] if row else None))
         ext = execute(self.client, payloads.GetItemInfoExt(media_key=media_id))
+        if os.environ.get('WEB_RETRY_ONLY') == '1':
+            values = {'source_bytes': getattr(ext,'size',None),
+                      'stored_bytes_info': getattr(info,'space_taken',None),
+                      'stored_bytes_ext': getattr(ext,'space_taken',None),
+                      'original_quality_info': getattr(info,'is_original_quality',None),
+                      'original_quality_ext': getattr(ext,'is_original_quality',None),
+                      'motion_duration': getattr(info,'live_photo_duration',None)}
+            values = {key: value if isinstance(value,(int,float,bool)) else None for key,value in values.items()}
+            print('ORIGINAL_METADATA_DIAGNOSTIC=' + json.dumps(values), flush=True)
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
             raise DownloadError('ORIGINAL_FILENAME_MISSING')

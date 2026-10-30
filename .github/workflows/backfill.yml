@@ -3,6 +3,15 @@ name: Google Photos Historical Backfill
 on:
   workflow_dispatch:
     inputs:
+      recovery_profile:
+        description: "Restore a manually staged Chrome profile from private Koofr (no media backup)"
+        type: boolean
+        required: false
+        default: false
+      recovery_sha256:
+        description: "SHA-256 of staged recovery archive; required when recovery_profile=true"
+        required: false
+        type: string
       max_items:
         description: "Maximum historical images/videos to attempt (subject to time budget)"
         required: false
@@ -19,7 +28,80 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+
+  recover_profile:
+    if: ${{ inputs.recovery_profile && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
+      EXPECTED_SHA256: ${{ inputs.recovery_sha256 }}
+    steps:
+      - name: Recover authenticated profile with existing Actions encryption key
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          WORK="$(mktemp -d "$RUNNER_TEMP/profile-recovery.XXXXXX")"
+          trap 'rm -rf -- "$WORK"; rm -f -- "$HOME/.config/rclone/rclone.conf"' EXIT
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "::error::Valid recovery_sha256 required"; exit 1; }
+          test -n "$KOOFR_USER" && test -n "$KOOFR_APP_PASSWORD" && test -n "$GPHOTOS_PROFILE_KEY"
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone
+          mkdir -p "$HOME/.config/rclone"
+          PASS="$(rclone obscure "$KOOFR_APP_PASSWORD")"
+          printf '[koofr_remote]\ntype = webdav\nurl = https://app.koofr.net/dav/Koofr\nvendor = other\nuser = %s\npass = %s\n' "$KOOFR_USER" "$PASS" > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+          AUTH='koofr_remote:/Google Photos/.gphotos-sync/auth'
+          STAGED="$AUTH/profile-recovery-20261030.tar.gz"
+          rclone copyto "$STAGED" "$WORK/recovery.tar.gz"
+          echo "$EXPECTED_SHA256  $WORK/recovery.tar.gz" | sha256sum -c -
+          python3 - "$WORK/recovery.tar.gz" <<'PY'
+          import sys, tarfile
+          from pathlib import PurePosixPath
+          with tarfile.open(sys.argv[1], 'r:gz') as tf:
+              members = tf.getmembers()
+              if not members or any(not (m.name == 'gphotos-profile-recovery' or m.name.startswith('gphotos-profile-recovery/')) or '..' in PurePosixPath(m.name).parts or not (m.isfile() or m.isdir()) for m in members):
+                  raise SystemExit('Unexpected archive paths or unsafe entry types')
+              names = {m.name for m in members}
+              if not 'gphotos-profile-recovery/Default/Preferences' in names:
+                  raise SystemExit('Missing Chrome preferences')
+              if not bool(names & {'gphotos-profile-recovery/Default/Cookies', 'gphotos-profile-recovery/Default/Network/Cookies'}):
+                  raise SystemExit('Missing Chrome cookie database')
+          PY
+          mkdir -p "$WORK/repack"
+          tar -C "$WORK/repack" -xzf "$WORK/recovery.tar.gz"
+          mv "$WORK/repack/gphotos-profile-recovery" "$WORK/repack/gphotos-profile"
+          rm -f "$WORK/repack/gphotos-profile"/Singleton*
+          tar -C "$WORK/repack" -czf "$WORK/profile.tgz" gphotos-profile
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in "$WORK/profile.tgz" -out "$WORK/profile.enc" -pass env:GPHOTOS_PROFILE_KEY
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$WORK/profile.enc" -out "$WORK/verify.tgz" -pass env:GPHOTOS_PROFILE_KEY
+          cmp "$WORK/profile.tgz" "$WORK/verify.tgz"
+          # Never overwrite the previously verified fallback.
+          rclone lsf "$AUTH/" --files-only | grep -Fxq 'profile-before-relogin-20261030.tar.gz.enc'
+          rclone copyto "$WORK/profile.enc" "$AUTH/profile.tar.gz.enc" --ignore-times
+          rclone cat "$AUTH/profile.tar.gz.enc" | sha256sum | grep -Fq "$(sha256sum "$WORK/profile.enc" | cut -d' ' -f1)"
+          echo 'RECOVERY_PROFILE_PERSISTED=PASS'
+          # Staging archive contains unencrypted cookies; remove only after verified upload.
+          rclone deletefile "$STAGED"
+          rclone lsf "$AUTH/" --files-only > "$WORK/remote-files"
+          if grep -Fx 'profile-recovery-20261030.tar.gz' "$WORK/remote-files"; then
+            echo "::error::Plaintext staging archive still exists"
+            exit 1
+          fi
+          echo 'RECOVERY_PLAINTEXT_REMOTE_CLEANUP=PASS'
+      - name: Cleanup recovery worker credentials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP"/profile-recovery.*
+          rm -f -- "$HOME/.config/rclone/rclone.conf"
+          echo 'RECOVERY_PLAINTEXT_LOCAL_CLEANUP=PASS'
   backfill:
+    if: ${{ !inputs.recovery_profile }}
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
     timeout-minutes: 330
@@ -91,6 +173,10 @@ jobs:
             echo "No worker profile to persist"
             exit 0
           fi
+          if ! grep -q '^WEB_SUMMARY=' "$RUNNER_TEMP/gphotos-backfill.log"; then
+            echo "PROFILE_PERSIST_SKIPPED: bootstrap/run not proven; encrypted profile preserved"
+            exit 0
+          fi
           rm -f "$HOME/gphotos-profile/SingletonLock" "$HOME/gphotos-profile/SingletonSocket" "$HOME/gphotos-profile/SingletonCookie"
           # Browser caches are disposable, but auth cookies/storage are not.
           # Excluding caches reduces the encrypted profile uploaded to Koofr
@@ -115,7 +201,7 @@ jobs:
         shell: bash
         run: |
           rm -rf "$HOME/gphotos-profile" /tmp/gphotos-downloads /tmp/gphotos-state || true
-          rm -f "$HOME/.config/rclone/rclone.conf" || true
+          rm -f "$HOME/.config/rclone/rclone.conf" /tmp/profile.tgz /tmp/profile.enc /tmp/profile-refresh.tgz /tmp/profile-refresh.enc || true
 
       - name: Historical backfill report
         if: always()

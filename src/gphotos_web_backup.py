@@ -370,7 +370,10 @@ class WebBackup:
         if not probe:
             rows = self.db.execute("SELECT m.id,m.type,m.url,m.label,m.created FROM media m JOIN web_items w ON w.id=m.id WHERE m.status!='uploaded' ORDER BY COALESCE(w.last_attempt,''),m.first_seen,m.id").fetchall()
             if retry_only:
-                rows = [r for r in rows if self.db.execute("SELECT status FROM media WHERE id=?", (r[0],)).fetchone()[0] == 'error']
+                errors = dict(self.db.execute("SELECT id,last_error FROM media WHERE status='error'"))
+                rows = [r for r in rows if r[0] in errors]
+                # Recover transport/remote failures before expensive original-size cases.
+                rows.sort(key=lambda r: 'ORIGINAL_SIZE_MISMATCH' in (errors[r[0]] or ''))
             for row in rows:
                 if self.e.left() < 300 or self.e.stats['attempted'] >= self.e.a.maxitems:
                     break

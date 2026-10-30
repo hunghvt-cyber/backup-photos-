@@ -173,10 +173,19 @@ class Engine:
   candidates=[f'{folder}/{name}',f'{folder}/{stem}__{i[:12]}{ext}',f'{folder}/{stem}__{i[:12]}__{local_sha[:16]}{ext}']
   for base in candidates:
    q=cmd('rclone','lsl',base,ok=False,cap=True)
-   if q.returncode in (3,4) or (q.returncode==0 and not q.stdout.strip()):return base,False
+   if q.returncode in (3,4):return base,False
    if q.returncode:raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED')
-   try:remote_size=int(q.stdout.strip().split()[0])
-   except (ValueError,IndexError):raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED') from None
+   if not q.stdout.strip():
+    stat=cmd('rclone','lsjson','--stat',base,'--retries','1','--low-level-retries','1','--contimeout','10s','--timeout','20s',ok=False,cap=True)
+    if stat.returncode in (3,4):return base,False
+    try:
+     data=json.loads(stat.stdout) if stat.returncode==0 else None
+     if not isinstance(data,dict) or data.get('IsDir') is not False or type(data.get('Size')) is not int or data['Size']<0:raise ValueError()
+     remote_size=data['Size']
+    except (ValueError,TypeError):raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED') from None
+   else:
+    try:remote_size=int(q.stdout.strip().split()[0])
+    except (ValueError,IndexError):raise RuntimeError('REMOTE_EXISTENCE_UNCONFIRMED') from None
    if remote_size==local_size:
     check=self.wd/f'{i}__remote-verify';cmd('rclone','copyto',base,str(check))
     try:

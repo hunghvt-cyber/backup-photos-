@@ -256,10 +256,29 @@ class WebBackup:
             dst.unlink(missing_ok=True)
             raise
 
+    def error_audit(self, phase):
+        # Never print raw stored errors, signed URLs or filenames.
+        groups = {}
+        rows = self.db.execute("SELECT last_error FROM media WHERE status='error'").fetchall()
+        codes = ('ORIGINAL_SIZE_MISMATCH', 'ORIGINAL_URL_MISSING', 'ORIGINAL_FILENAME_MISSING',
+                 'HTML_INSTEAD_OF_MEDIA', 'ORIGINAL_URL_REJECTED', 'HTTPError',
+                 'ConnectionError', 'ReadTimeout', 'Timeout', 'REMOTE_SIZE_UNCONFIRMED',
+                 'IMAGE_PREVIEW_INSTEAD_OF_VIDEO')
+        for (message,) in rows:
+            category = next((code for code in codes if code.lower() in (message or '').lower()), 'OTHER')
+            groups[category] = groups.get(category, 0) + 1
+        eligible = self.db.execute("SELECT COUNT(*) FROM media m JOIN web_items w ON w.id=m.id WHERE m.status='error'").fetchone()[0]
+        print('WEB_ERROR_AUDIT=' + json.dumps({'phase': phase, 'total': len(rows),
+              'eligible': eligible, 'unmapped': len(rows) - eligible, 'categories': groups}), flush=True)
+
     def run(self, scan_seconds, probe=False):
+        retry_only = os.environ.get('WEB_RETRY_ONLY') == '1'
+        if retry_only:
+            self.error_audit('before')
         inventory_error = False
         try:
-            self.inventory(scan_seconds)
+            if not retry_only:
+                self.inventory(scan_seconds)
         except Exception as exc:
             inventory_error = True
             # Do not log signed URLs, tokens, cookies or personal album titles.
@@ -268,7 +287,7 @@ class WebBackup:
         self.e.download = self.download
         if not probe:
             rows = self.db.execute("SELECT m.id,m.type,m.url,m.label,m.created FROM media m JOIN web_items w ON w.id=m.id WHERE m.status!='uploaded' ORDER BY COALESCE(w.last_attempt,''),m.first_seen,m.id").fetchall()
-            if os.environ.get('WEB_RETRY_ONLY') == '1':
+            if retry_only:
                 rows = [r for r in rows if self.db.execute("SELECT status FROM media WHERE id=?", (r[0],)).fetchone()[0] == 'error']
             for row in rows:
                 if self.e.left() < 300 or self.e.stats['attempted'] >= self.e.a.maxitems:
@@ -288,6 +307,8 @@ class WebBackup:
                   'albums': self.db.execute('SELECT COUNT(*) FROM web_albums').fetchone()[0],
                   'album_memberships': self.db.execute('SELECT COUNT(*) FROM web_album_items').fetchone()[0],
                   'probe': probe, 'status': 'PARTIAL' if inventory_error or self.e.stats['errors'] else 'PAUSED'}
+        if retry_only:
+            self.error_audit('after')
         print('WEB_SUMMARY=' + json.dumps(report), flush=True)
         return int(inventory_error or self.e.stats['errors'] > 0)
 

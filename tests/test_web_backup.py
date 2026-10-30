@@ -24,6 +24,24 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_live_photo_zip_requires_exact_pair_sum_and_valid_payloads(self):
+        import zipfile
+        self.e.wd = Path(self.tmp.name)
+        archive = self.e.wd / 'live.zip'
+        photo = b'\\xff\\xd8\\xfforiginal'
+        video = b'motion-video'
+        for total, valid in [(len(photo)+len(video), True), (len(photo)+len(video)+1, False)]:
+            with zipfile.ZipFile(archive, 'w') as zipped:
+                zipped.writestr('IMG.jpg', photo)
+                zipped.writestr('IMG.mp4', video)
+            with patch('src.gphotos_web_backup.validate_media', return_value='video'):
+                self.assertEqual(self.web.validate_live_photo_zip(archive, 'IMG.jpg', total), valid)
+        with zipfile.ZipFile(archive, 'w') as zipped:
+            zipped.writestr('IMG.jpg', photo)
+            zipped.writestr('../IMG.mp4', video)
+        self.assertFalse(self.web.validate_live_photo_zip(archive,'IMG.jpg',len(photo)+len(video)))
+        self.assertFalse(list(self.e.wd.glob('livephoto-component-*')))
+
     def test_zip_original_member_size_and_path_are_strict(self):
         import zipfile
         archive = Path(self.tmp.name) / 'original.zip'

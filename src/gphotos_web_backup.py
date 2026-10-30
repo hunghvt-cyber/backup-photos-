@@ -202,6 +202,17 @@ class WebBackup:
                       'motion_duration': getattr(info,'live_photo_duration',None)}
             values = {key: value if isinstance(value,(int,float,bool)) else None for key,value in values.items()}
             print('ORIGINAL_METADATA_DIAGNOSTIC=' + json.dumps(values), flush=True)
+            if os.environ.get('WEB_REPAIR_METADATA_BATCH') == '1':
+                try:
+                    batch = execute(self.client, payloads.GetBatchMediaInfo(media_keys=[media_id]))
+                    match = next((item for item in batch if getattr(item,'media_key',None) == media_id), None)
+                    values = {'source_bytes_batch': getattr(match,'size',None),
+                              'stored_bytes_batch': getattr(match,'space_taken',None),
+                              'original_quality_batch': getattr(match,'is_original_quality',None)}
+                    values = {key: value if isinstance(value,(int,float,bool)) else None for key,value in values.items()}
+                    print('ORIGINAL_BATCH_METADATA_DIAGNOSTIC=' + json.dumps(values), flush=True)
+                except Exception as exc:
+                    print('ORIGINAL_BATCH_METADATA_UNAVAILABLE type=' + type(exc).__name__, flush=True)
         name = Path(ext.file_name or '').name
         if not name or name in ('.', '..'):
             raise DownloadError('ORIGINAL_FILENAME_MISSING')

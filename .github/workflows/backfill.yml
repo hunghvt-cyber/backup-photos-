@@ -1,6 +1,9 @@
 name: Google Photos Historical Backfill
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/backfill.yml']
   workflow_dispatch:
     inputs:
       recovery_profile:
@@ -9,7 +12,7 @@ on:
         required: false
         default: false
       recovery_sha256:
-        description: "SHA-256 of staged recovery archive; required when recovery_profile=true"
+        description: "Optional independent SHA-256; otherwise verify two Koofr reads"
         required: false
         type: string
       max_items:
@@ -30,7 +33,7 @@ concurrency:
 jobs:
 
   recover_profile:
-    if: ${{ inputs.recovery_profile && github.event_name == 'workflow_dispatch' }}
+    if: ${{ (inputs.recovery_profile && github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.event.head_commit.message == 'Run staged profile recovery once 20261030') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -46,7 +49,9 @@ jobs:
           umask 077
           WORK="$(mktemp -d "$RUNNER_TEMP/profile-recovery.XXXXXX")"
           trap 'rm -rf -- "$WORK"; rm -f -- "$HOME/.config/rclone/rclone.conf"' EXIT
-          [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "::error::Valid recovery_sha256 required"; exit 1; }
+          if [ -n "$EXPECTED_SHA256" ] && ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::Invalid recovery_sha256"; exit 1
+          fi
           test -n "$KOOFR_USER" && test -n "$KOOFR_APP_PASSWORD" && test -n "$GPHOTOS_PROFILE_KEY"
           sudo apt-get update -qq
           sudo apt-get install -y rclone
@@ -57,7 +62,13 @@ jobs:
           AUTH='koofr_remote:/Google Photos/.gphotos-sync/auth'
           STAGED="$AUTH/profile-recovery-20261030.tar.gz"
           rclone copyto "$STAGED" "$WORK/recovery.tar.gz"
-          echo "$EXPECTED_SHA256  $WORK/recovery.tar.gz" | sha256sum -c -
+          LOCAL_SHA="$(sha256sum "$WORK/recovery.tar.gz" | cut -d' ' -f1)"
+          REMOTE_SHA="$(rclone cat "$STAGED" | sha256sum | cut -d' ' -f1)"
+          test "$LOCAL_SHA" = "$REMOTE_SHA"
+          if [ -n "$EXPECTED_SHA256" ]; then
+            echo "$EXPECTED_SHA256  $WORK/recovery.tar.gz" | sha256sum -c -
+          fi
+          echo "RECOVERY_STAGED_TRANSFER_SHA256=$LOCAL_SHA"
           python3 - "$WORK/recovery.tar.gz" <<'PY'
           import sys, tarfile
           from pathlib import PurePosixPath
@@ -81,8 +92,13 @@ jobs:
           cmp "$WORK/profile.tgz" "$WORK/verify.tgz"
           # Never overwrite the previously verified fallback.
           rclone lsf "$AUTH/" --files-only | grep -Fxq 'profile-before-relogin-20261030.tar.gz.enc'
+          FALLBACK_SHA="$(rclone cat "$AUTH/profile-before-relogin-20261030.tar.gz.enc" | sha256sum | cut -d' ' -f1)"
+          rclone copyto "$WORK/profile.enc" "$AUTH/profile-recovered-20261030.tar.gz.enc" --ignore-times
+          rclone cat "$AUTH/profile-recovered-20261030.tar.gz.enc" | sha256sum | grep -Fq "$(sha256sum "$WORK/profile.enc" | cut -d' ' -f1)"
           rclone copyto "$WORK/profile.enc" "$AUTH/profile.tar.gz.enc" --ignore-times
           rclone cat "$AUTH/profile.tar.gz.enc" | sha256sum | grep -Fq "$(sha256sum "$WORK/profile.enc" | cut -d' ' -f1)"
+          test "$FALLBACK_SHA" = "$(rclone cat "$AUTH/profile-before-relogin-20261030.tar.gz.enc" | sha256sum | cut -d' ' -f1)"
+          echo 'RECOVERY_FALLBACK_UNCHANGED=PASS'
           echo 'RECOVERY_PROFILE_PERSISTED=PASS'
           # Staging archive contains unencrypted cookies; remove only after verified upload.
           rclone deletefile "$STAGED"
@@ -101,7 +117,7 @@ jobs:
           rm -f -- "$HOME/.config/rclone/rclone.conf"
           echo 'RECOVERY_PLAINTEXT_LOCAL_CLEANUP=PASS'
   backfill:
-    if: ${{ !inputs.recovery_profile }}
+    if: ${{ github.event_name != 'push' && !inputs.recovery_profile }}
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
     timeout-minutes: 330

@@ -24,6 +24,15 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_original_control_never_selects_delete_or_revert(self):
+        controls = []
+        for label in ('Xóa bản gốc','Khôi phục bản gốc','Delete original','Tải tệp RAW xuống'):
+            control=MagicMock()
+            control.get_attribute.return_value=label
+            controls.append(control)
+        page=NS(get_by_role=lambda role:NS(all=lambda:controls))
+        self.assertIs(self.web.download_control(page,'menuitem',(),prefix=True),controls[-1])
+
     def test_explicit_original_menu_requires_matching_size_and_cleans_failure(self):
         self.e.a = NS(profile='unused',chrome='unused')
         self.e.wd = Path(self.tmp.name)

@@ -20,3 +20,14 @@ User authorized repair of all 198 existing failures, preserving source media and
 
 ## Remaining acceptance
 Read completed batch logs, compare before/after error counts and verified uploads, inspect public report. Do not claim 198 repaired until runtime proves zero pending errors. If ZIP still differs from metadata, retain errors and record that limitation rather than relaxing original verification.
+
+## Verified root causes and acceptance
+1. Exact-object Koofr stat: a real retry returned lsl rc=0 with empty stdout, while lsjson --stat returned a valid file Size. Run 41131301904 recovered one such object. Existing-object lookup now uses exact stat on empty listings and still downloads/hashes an existing same-sized object before reuse; unknown stat is not permission to overwrite.
+2. Live Photo aggregate size: a real official ZIP contained HEIC (2,160,850 bytes) and MP4 (4,758,336 bytes); sum 6,919,186 exactly matches source metadata. Comparing only one component to that aggregate caused false size mismatches. No source-size tolerance was introduced.
+3. Live Photo archives retain the unchanged official ZIP with both original filenames. Exactly two safe, same-stem image/video members are required; sizes must sum exactly to metadata, ZIP CRC is checked by fully reading both members, still magic and motion video/duration are validated, and local component files are removed. Archive remote size is verified separately after upload.
+4. Acceptance run [41132219007](https://github.com/hunghvt-cyber/backup-photos-/actions/runs/41132219007): 2 attempted, 2 uploaded, 0 errors. One existing remote object reused after SHA-256 match; one complete Live Photo archive saved. Pending errors 196 -> 194; uploaded total 9,995.
+
+## Active full repair and checkpoints
+- Full remaining-cohort run [41132862344](https://github.com/hunghvt-cyber/backup-photos-/actions/runs/41132862344), source df917e32663a39948776293273b0e7051e3d8952, maximum 194 error-only attempts, normal 5-hour engine budget.
+- One-time trigger removed. Normal Backfill now enables the proven ZIP fallback too, so newly encountered Live Photos use the same verified preservation path. Normal inventory scheduling and Daily checkpoint behavior otherwise unchanged.
+- Read-only audit run 41130630866 latest replay at 2026-10-30T21:49:55Z: error=154, uploaded=10035, seen=42562; REMOTE_SIZE_UNCONFIRMED=0. Thus 44 of the original 198 failures have been verified repaired at this checkpoint. Full repair is still RUNNING; zero remaining errors is not yet proven.

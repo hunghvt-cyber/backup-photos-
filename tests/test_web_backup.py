@@ -31,7 +31,12 @@ class WebInventoryTests(unittest.TestCase):
         context, page, pw = MagicMock(), MagicMock(), MagicMock()
         context.pages = [page]
         pw.chromium.launch_persistent_context.return_value = context
-        page.get_by_role.return_value.count.return_value = 1
+        import unicodedata
+        more, original = MagicMock(), MagicMock()
+        more.get_attribute.return_value = unicodedata.normalize('NFD','Tuỳ chọn khác') + chr(160)
+        original.get_attribute.return_value = None
+        original.inner_text.return_value = unicodedata.normalize('NFD','Tải bản gốc xuống') + ' Shift+D'
+        page.get_by_role.side_effect = lambda role, **kw: NS(all=lambda: [more] if role=='button' else [original])
         download = NS(suggested_filename='original.jpg',save_as=lambda dst:Path(dst).write_bytes(b'original'))
         page.expect_download.return_value.__enter__.return_value.value = download
         manager = MagicMock()

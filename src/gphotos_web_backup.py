@@ -274,6 +274,9 @@ class WebBackup:
             with zipfile.ZipFile(archive) as zipped:
                 files = [entry for entry in zipped.infolist() if not entry.is_dir()]
                 if len(files) != 1 or files[0].filename != name:
+                    print('ORIGINAL_ZIP_DIAGNOSTIC=' + json.dumps({'members': len(files),
+                          'sizes': [entry.file_size for entry in files], 'suffixes': [Path(entry.filename).suffix.lower() if Path(entry.filename).suffix.lower() in ('.jpg','.jpeg','.png','.heic','.mp4','.mov','.json') else 'other' for entry in files],
+                          'exact_name_matches': sum(entry.filename == name for entry in files)}), flush=True)
                     raise DownloadError('ORIGINAL_ZIP_CONTENT_UNEXPECTED')
                 if files[0].file_size != expected_size:
                     print('ORIGINAL_SIZE_DIAGNOSTIC=' + json.dumps({'route': 'zip_member',
@@ -373,7 +376,10 @@ class WebBackup:
                 errors = dict(self.db.execute("SELECT id,last_error FROM media WHERE status='error'"))
                 rows = [r for r in rows if r[0] in errors]
                 # Recover transport/remote failures before expensive original-size cases.
-                rows.sort(key=lambda r: 'ORIGINAL_SIZE_MISMATCH' in (errors[r[0]] or ''))
+                is_size = lambda r: any(code in (errors[r[0]] or '') for code in ('ORIGINAL_SIZE_MISMATCH','ORIGINAL_ZIP'))
+                rows.sort(key=is_size)
+                if os.environ.get('WEB_REPAIR_SAMPLE') == '1':
+                    rows = [group[0] for group in ([r for r in rows if not is_size(r)], [r for r in rows if is_size(r)]) if group]
             for row in rows:
                 if self.e.left() < 300 or self.e.stats['attempted'] >= self.e.a.maxitems:
                     break

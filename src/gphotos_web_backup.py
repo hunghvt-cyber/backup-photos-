@@ -382,6 +382,17 @@ class WebBackup:
             dst.unlink(missing_ok=True)
             raise
 
+    @staticmethod
+    def download_control(page, role, labels, prefix=False):
+        matches = []
+        for control in page.get_by_role(role).all():
+            label = control.get_attribute('aria-label') or control.inner_text()
+            normalized = unicodedata.normalize('NFKD',label).encode('ascii','ignore').decode().lower()
+            normalized = ' '.join(normalized.split())
+            if any(normalized == name or (prefix and normalized.startswith(name + ' ')) for name in labels):
+                matches.append(control)
+        return matches[0] if len(matches) == 1 else None
+
     def browser_unmodified_original(self, media_id, expected_size):
         if type(expected_size) is not int or expected_size <= 0:
             raise DownloadError('ORIGINAL_SIZE_UNAVAILABLE')
@@ -395,29 +406,25 @@ class WebBackup:
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto(row[0], wait_until='domcontentloaded', timeout=90000)
-                page.wait_for_timeout(2000)
-                more = page.get_by_role('button', name=re.compile(r'^(More options|Other options|Tùy chọn khác|Tuỳ chọn khác|Thêm tùy chọn|Thao tác khác)(?: .*)?$', re.I))
-                try:
-                    more.wait_for(state='visible', timeout=15000)
-                except Exception:
-                    pass
-                if more.count() != 1:
-                    allowed = {'more','options','other','download','original','raw','tai','xuong','ban','goc','tuy','chon','khac','them','chinh','sua','edit','file','thao','tac'}
-                    controls = []
-                    for button in page.get_by_role('button').all():
-                        label = button.get_attribute('aria-label') or button.inner_text()
-                        normalized = unicodedata.normalize('NFKD',label).encode('ascii','ignore').decode().lower()
-                        tokens = [word for word in re.findall('[a-z]+',normalized) if word in allowed]
-                        if tokens:
-                            controls.append(tokens)
-                    print('ORIGINAL_UI_DIAGNOSTIC=' + json.dumps({'at_photos':urlparse(page.url).hostname=='photos.google.com',
-                          'viewer_path':urlparse(page.url).path.startswith('/photo/'),'control_tokens':controls}), flush=True)
+                more = None
+                for _ in range(30):
+                    more = self.download_control(page,'button',('more options','other options','tuy chon khac','them tuy chon','thao tac khac'))
+                    if more is not None:
+                        break
+                    page.wait_for_timeout(500)
+                if more is None:
                     raise DownloadError('ORIGINAL_MENU_UNAVAILABLE')
                 more.click()
-                page.wait_for_timeout(500)
-                original = page.get_by_role('menuitem', name=re.compile(r'^(Download original|Tải (?:xuống )?(?:bản|ảnh) gốc(?: xuống)?)(?: .*)?$', re.I))
-                print('ORIGINAL_UNMODIFIED_MENU_AVAILABLE=' + str(original.count() == 1), flush=True)
-                if original.count() != 1:
+                original = None
+                for _ in range(20):
+                    original = self.download_control(page,'menuitem',
+                        ('download original','download raw file','tai ban goc xuong','tai xuong ban goc',
+                         'tai anh goc xuong','tai xuong anh goc','tai tep raw','tai xuong tep raw'),prefix=True)
+                    if original is not None:
+                        break
+                    page.wait_for_timeout(250)
+                print('ORIGINAL_UNMODIFIED_MENU_AVAILABLE=' + str(original is not None), flush=True)
+                if original is None:
                     raise DownloadError('ORIGINAL_UNMODIFIED_UNAVAILABLE')
                 with page.expect_download(timeout=120000) as event:
                     original.click()

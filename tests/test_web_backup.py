@@ -28,7 +28,7 @@ class WebInventoryTests(unittest.TestCase):
         import zipfile
         self.e.wd = Path(self.tmp.name)
         archive = self.e.wd / 'live.zip'
-        photo = b'\\xff\\xd8\\xfforiginal'
+        photo = bytes([255,216,255]) + b'original'
         video = b'motion-video'
         for total, valid in [(len(photo)+len(video), True), (len(photo)+len(video)+1, False)]:
             with zipfile.ZipFile(archive, 'w') as zipped:

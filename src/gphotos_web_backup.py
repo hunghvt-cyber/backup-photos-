@@ -257,7 +257,12 @@ class WebBackup:
             if route == 0:
                 print('ORIGINAL_FALLBACK reason=' + str(last_error), flush=True)
         if os.environ.get('WEB_ZIP_REPAIR') == '1':
-            return self.zip_original(media_id, name, ext.size)
+            try:
+                return self.zip_original(media_id, name, ext.size)
+            except DownloadError as exc:
+                if os.environ.get('WEB_UNMODIFIED_REPAIR') == '1' and str(exc) in ('ORIGINAL_SIZE_MISMATCH','ORIGINAL_ZIP_CONTENT_UNEXPECTED'):
+                    return self.browser_unmodified_original(media_id, ext.size)
+                raise
         if os.environ.get('WEB_BROWSER_REPAIR') == '1':
             print('ORIGINAL_BROWSER_FALLBACK=START', flush=True)
             return self.browser_original(media_id, ext.size)
@@ -368,6 +373,51 @@ class WebBackup:
         except BaseException:
             dst.unlink(missing_ok=True)
             raise
+
+    def browser_unmodified_original(self, media_id, expected_size):
+        if type(expected_size) is not int or expected_size <= 0:
+            raise DownloadError('ORIGINAL_SIZE_UNAVAILABLE')
+        row = self.db.execute('SELECT url FROM media WHERE id=?', (media_id,)).fetchone()
+        if not row or not row[0].startswith('https://photos.google.com/'):
+            raise DownloadError('ORIGINAL_PAGE_UNAVAILABLE')
+        dst = None
+        with sync_playwright() as pw:
+            context = pw.chromium.launch_persistent_context(self.e.a.profile, executable_path=self.e.a.chrome,
+                headless=True, accept_downloads=True, args=['--disable-dev-shm-usage','--no-first-run'])
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(row[0], wait_until='domcontentloaded', timeout=90000)
+                page.wait_for_timeout(2000)
+                more = page.get_by_role('button', name=re.compile(r'^(More options|Tùy chọn khác)$', re.I))
+                if more.count() != 1:
+                    raise DownloadError('ORIGINAL_MENU_UNAVAILABLE')
+                more.click()
+                page.wait_for_timeout(500)
+                original = page.get_by_role('menuitem', name=re.compile(r'^(Download original|Tải (?:xuống )?(?:bản|ảnh) gốc(?: xuống)?)$', re.I))
+                print('ORIGINAL_UNMODIFIED_MENU_AVAILABLE=' + str(original.count() == 1), flush=True)
+                if original.count() != 1:
+                    raise DownloadError('ORIGINAL_UNMODIFIED_UNAVAILABLE')
+                with page.expect_download(timeout=120000) as event:
+                    original.click()
+                download = event.value
+                name = Path(download.suggested_filename).name
+                if not name or name in ('.','..'):
+                    raise DownloadError('ORIGINAL_FILENAME_MISSING')
+                dst = self.e.wd / (media_id + '__' + name)
+                download.save_as(str(dst))
+                actual = dst.stat().st_size
+                print('ORIGINAL_SIZE_DIAGNOSTIC=' + json.dumps({'route':'unmodified_menu',
+                      'expected_bytes':expected_size,'actual_bytes':actual}), flush=True)
+                if actual != expected_size:
+                    raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                print('ORIGINAL_UNMODIFIED_MENU=VERIFIED_SIZE', flush=True)
+                return dst, name
+            except BaseException:
+                if dst is not None:
+                    dst.unlink(missing_ok=True)
+                raise
+            finally:
+                context.close()
 
     def browser_original(self, media_id, expected_size):
         if type(expected_size) is not int or expected_size <= 0:

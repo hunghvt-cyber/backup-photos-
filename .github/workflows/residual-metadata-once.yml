@@ -1,0 +1,106 @@
+name: Read-only existing RAW copy resolution
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/residual-metadata-once.yml']
+permissions:
+  contents: read
+concurrency:
+  group: google-photos-koofr-state
+  cancel-in-progress: false
+jobs:
+  audit:
+    if: github.event.head_commit.message == 'Resolve existing owned RAW copies read only 20261031'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      KOOFR_USER: ${{ secrets.KOOFR_USER }}
+      KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
+      GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read metadata only; preserve encrypted profile and all media
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          WORK="$(mktemp -d)"
+          trap 'rm -rf -- "$WORK"; rm -f -- "$HOME/.config/rclone/rclone.conf"' EXIT
+          sudo apt-get update -qq
+          sudo apt-get install -y rclone
+          python3 -m pip install --disable-pip-version-check -r requirements.txt
+          mkdir -p "$HOME/.config/rclone"
+          PASS="$(rclone obscure "$KOOFR_APP_PASSWORD")"
+          printf '[koofr_remote]\ntype = webdav\nurl = https://app.koofr.net/dav/Koofr\nvendor = other\nuser = %s\npass = %s\n' "$KOOFR_USER" "$PASS" > "$HOME/.config/rclone/rclone.conf"
+          AUTH='koofr_remote:/Google Photos/.gphotos-sync'
+          rclone copyto "$AUTH/auth/profile.tar.gz.enc" "$WORK/profile.enc" --retries 1 --timeout 60s
+          rclone copyto "$AUTH/manifest.sqlite" "$WORK/manifest.sqlite" --retries 1 --timeout 30s
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$WORK/profile.enc" -out "$WORK/profile.tgz" -pass env:GPHOTOS_PROFILE_KEY
+          tar -C "$WORK" -xzf "$WORK/profile.tgz"
+          rm -f "$WORK/gphotos-profile"/Singleton*
+          python3 - "$WORK" <<'PY'
+          import sys,sqlite3,json,logging,shutil,time
+          from pathlib import Path
+          from collections import Counter
+          from playwright.sync_api import sync_playwright
+          from src.gphotos_web_backup import BoundedClient,execute,export_cookies
+          from gpwc import payloads
+          work=Path(sys.argv[1])
+          logging.disable(logging.CRITICAL)
+          with sync_playwright() as pw:
+              context=pw.chromium.launch_persistent_context(str(work/'gphotos-profile'),executable_path=shutil.which('google-chrome-stable') or shutil.which('google-chrome'),headless=True,args=['--disable-dev-shm-usage','--no-first-run'])
+              try:
+                  page=context.pages[0] if context.pages else context.new_page()
+                  page.goto('https://photos.google.com/',wait_until='domcontentloaded',timeout=90000)
+                  page.wait_for_timeout(3000)
+                  export_cookies(context,work/'cookies.txt')
+              finally:
+                  context.close()
+          client=BoundedClient(work/'cookies.txt',log_level='CRITICAL')
+          groups=Counter()
+          wanted={}
+          records=[]
+          with sqlite3.connect((work/'manifest.sqlite').as_uri()+'?mode=ro',uri=True) as db:
+              assert db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
+              rows=db.execute("SELECT m.id,w.album FROM media m JOIN web_items w ON w.id=m.id WHERE m.status='error' ORDER BY m.id").fetchall()
+              for index,(media,album) in enumerate(rows):
+                  try:
+                      info=execute(client,payloads.GetItemInfo(media_key=media,album_media_key=album))
+                      ext=execute(client,payloads.GetItemInfoExt(media_key=media))
+                      if ext.dedup_key:
+                          wanted.setdefault(ext.dedup_key,set()).add(media)
+                      suffix=Path(ext.file_name or '').suffix.lower()
+                      kind='camera_raw' if suffix in ('.arw','.cr2','.cr3','.dng','.nef','.nrw','.raf','.pef','.rw2','.srw','.orf') else ('jpeg' if suffix in ('.jpg','.jpeg') else 'other')
+                      shared=any(s in ('shared','partnerShared') for s in (ext.source or []))
+                      saved=bool(ext.saved_to_your_photos)
+                      groups[f'{kind}|shared={shared}|saved_flag={saved}|original_quality={bool(ext.is_original_quality)}']+=1
+                      record={'index':index,'kind':kind,'shared':shared,'saved_flag':saved,'original_quality':bool(ext.is_original_quality),'source_bytes':ext.size,'album_context':bool(album)}
+                      records.append(record)
+                      print('RESIDUAL_SOURCE_RECORD='+json.dumps(record),flush=True)
+                  except Exception as exc:
+                      groups['UNAVAILABLE_'+type(exc).__name__]+=1
+          print('RESIDUAL_SOURCE_AUDIT='+json.dumps({'total':len(rows),'groups':dict(groups),'read_only':True}),flush=True)
+          found={}
+          page_id=None
+          complete=False
+          started=time.monotonic()
+          for page_number in range(1000):
+              if time.monotonic()-started>480:
+                  break
+              page=execute(client,payloads.GetLibraryPageByUploadedDate(page_id=page_id))
+              for item in page.items:
+                  if item.dedup_key in wanted:
+                      found.setdefault(item.dedup_key,set()).add(item.media_key)
+              page_id=page.next_page_id
+              print('OWNED_RESOLUTION_PROGRESS='+json.dumps({'pages':page_number+1,'dedups_matched':len(found),'different_owned_copies':sum(bool(found.get(key,set())-sources) for key,sources in wanted.items())}),flush=True)
+              if all(found.get(key,set())-sources for key,sources in wanted.items()):
+                  break
+              if not page_id:
+                  complete=True
+                  break
+          result={'requested_dedups':len(wanted),'matched_dedups':len(found),'same_source_ids':sum(bool(found.get(key,set())&sources) for key,sources in wanted.items()),'different_owned_copies':sum(bool(found.get(key,set())-sources) for key,sources in wanted.items()),'full_scan_complete':complete,'read_only':True}
+          print('OWNED_RAW_RESOLUTION_AUDIT='+json.dumps(result),flush=True)
+
+          PY
+          rm -rf -- "$WORK"
+          echo 'RESIDUAL_AUDIT_PLAINTEXT_CLEANUP=PASS'

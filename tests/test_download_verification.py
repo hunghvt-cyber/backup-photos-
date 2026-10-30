@@ -122,10 +122,22 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(w.client.session.get.call_count, 1)
 
     def test_temporary_remote_listing_failure_retries_without_upload(self):
-        with patch('src.gphotos_sync.cmd', side_effect=[NS(returncode=1, stdout=''), NS(returncode=0, stdout=''), NS(returncode=0, stdout='8 photo.jpg')]) as run, patch('src.gphotos_sync.time.sleep'):
+        with patch('src.gphotos_sync.cmd', side_effect=[NS(returncode=1, stdout=''), NS(returncode=1, stdout=''), NS(returncode=0, stdout=''), NS(returncode=1, stdout=''), NS(returncode=0, stdout='8 photo.jpg')]) as run, patch('src.gphotos_sync.time.sleep'):
             self.e.verify_remote_size('koofr:file', 8)
-        self.assertEqual(run.call_count, 3)
-        self.assertTrue(all(c.args[1] == 'lsl' for c in run.call_args_list))
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual([c.args[1] for c in run.call_args_list], ['lsl','lsjson','lsl','lsjson','lsl'])
+
+    def test_structured_stat_requires_exact_file_size(self):
+        for data, succeeds in [({'Size':8,'IsDir':False}, True), ({'Size':7,'IsDir':False}, False),
+                               ({'Size':8,'IsDir':True}, False), ({'Size':'8','IsDir':False}, False)]:
+            def response(*args, **kwargs):
+                return NS(returncode=0, stdout=json.dumps(data) if args[1]=='lsjson' else '')
+            with patch('src.gphotos_sync.cmd', side_effect=response), patch('src.gphotos_sync.time.sleep'):
+                if succeeds:
+                    self.e.verify_remote_size('koofr:special[1].jpg', 8)
+                else:
+                    with self.assertRaises(RuntimeError):
+                        self.e.verify_remote_size('koofr:special[1].jpg', 8)
 
     def test_unconfirmed_or_wrong_remote_never_marks_uploaded(self):
         for result in (NS(returncode=0, stdout=''), NS(returncode=0, stdout='7 photo.jpg')):

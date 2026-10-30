@@ -127,6 +127,25 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(run.call_count, 5)
         self.assertEqual([c.args[1] for c in run.call_args_list], ['lsl','lsjson','lsl','lsjson','lsl'])
 
+    def test_empty_listing_still_hash_checks_exact_existing_object(self):
+        import hashlib
+        data = b'original'
+        def command(*args, **kwargs):
+            if args[1] == 'lsl':
+                return NS(returncode=0, stdout='')
+            if args[1] == 'lsjson':
+                return NS(returncode=0, stdout=json.dumps({'Size':len(data),'IsDir':False}))
+            if args[1] == 'copyto':
+                Path(args[3]).write_bytes(data)
+                return NS(returncode=0, stdout='')
+            raise AssertionError(args[1])
+        with patch('src.gphotos_sync.cmd', side_effect=command):
+            _, reused = self.e.remote(None, 'Unicode[1].jpg', 'media', hashlib.sha256(data).hexdigest(), len(data))
+        self.assertTrue(reused)
+        with patch('src.gphotos_sync.cmd', return_value=NS(returncode=0,stdout='')):
+            with self.assertRaisesRegex(RuntimeError,'REMOTE_EXISTENCE_UNCONFIRMED'):
+                self.e.remote(None,'Unicode[1].jpg','media','hash',len(data))
+
     def test_structured_stat_requires_exact_file_size(self):
         for data, succeeds in [({'Size':8,'IsDir':False}, True), ({'Size':7,'IsDir':False}, False),
                                ({'Size':8,'IsDir':True}, False), ({'Size':'8','IsDir':False}, False)]:

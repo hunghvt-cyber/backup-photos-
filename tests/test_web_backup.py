@@ -24,6 +24,22 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_browser_original_checks_exact_source_size_and_cleans_mismatch(self):
+        self.e.db.touch('failed', 'photo', 'https://photos.google.com/photo/failed', None, None)
+        path = Path(self.tmp.name) / 'download.jpg'
+        path.write_bytes(b'original')
+        with patch('src.gphotos_web_backup.sync_playwright'), patch('src.gphotos_web_backup.Engine.download', return_value=(path, 'download.jpg')):
+            self.assertEqual(self.web.browser_original('failed', 8), (path, 'download.jpg'))
+            with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_SIZE_MISMATCH'):
+                self.web.browser_original('failed', 9)
+        self.assertFalse(path.exists())
+
+    def test_browser_original_without_source_size_never_downloads(self):
+        with patch('src.gphotos_web_backup.Engine.download') as download:
+            with self.assertRaisesRegex(RuntimeError, 'ORIGINAL_SIZE_UNAVAILABLE'):
+                self.web.browser_original('failed', None)
+        download.assert_not_called()
+
     def test_retry_only_preserves_inventory_and_ignores_seen_rows(self):
         self.e.a = NS(maxitems=10)
         self.e.stats.update(uploaded=0, skipped=0)

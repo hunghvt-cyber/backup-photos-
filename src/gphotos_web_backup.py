@@ -396,7 +396,7 @@ class WebBackup:
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto(row[0], wait_until='domcontentloaded', timeout=90000)
                 page.wait_for_timeout(2000)
-                more = page.get_by_role('button', name=re.compile(r'^(More options|Other options|Tùy chọn khác|Tuỳ chọn khác|Thêm tùy chọn|Thao tác khác)(?:\\s.*)?, re.I))
+                more = page.get_by_role('button', name=re.compile(r'^(More options|Other options|Tùy chọn khác|Tuỳ chọn khác|Thêm tùy chọn|Thao tác khác)(?: .*)?, re.I))
                 try:
                     more.wait_for(state='visible', timeout=15000)
                 except Exception:
@@ -415,7 +415,7 @@ class WebBackup:
                     raise DownloadError('ORIGINAL_MENU_UNAVAILABLE')
                 more.click()
                 page.wait_for_timeout(500)
-                original = page.get_by_role('menuitem', name=re.compile(r'^(Download original|Tải (?:xuống )?(?:bản|ảnh) gốc(?: xuống)?)(?:\\s.*)?, re.I))
+                original = page.get_by_role('menuitem', name=re.compile(r'^(Download original|Tải (?:xuống )?(?:bản|ảnh) gốc(?: xuống)?)(?: .*)?, re.I))
                 print('ORIGINAL_UNMODIFIED_MENU_AVAILABLE=' + str(original.count() == 1), flush=True)
                 if original.count() != 1:
                     raise DownloadError('ORIGINAL_UNMODIFIED_UNAVAILABLE')

@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 from gpwc import Client, payloads
-from src.gphotos_sync import Engine, now
+from src.gphotos_sync import Engine, now, validate_media, image_payload
 
 
 def export_cookies(context, path):
@@ -250,7 +250,7 @@ class WebBackup:
         archive = self.e.wd / (media_id + '__official.zip')
         dst = self.e.wd / (media_id + '__' + name)
         try:
-            for attempt in range(6):
+            for attempt in range(30):
                 if self.e.left() < 240:
                     raise DownloadError('STOP_RESERVE')
                 info = execute(self.client, payloads.CheckDownloadToken(download_token=token))
@@ -262,11 +262,56 @@ class WebBackup:
             if type(info.download_size) is not int or info.download_size <= 0:
                 raise DownloadError('ORIGINAL_ZIP_SIZE_UNAVAILABLE')
             self.fetch_original(info.download_url, archive, info.download_size, route='zip')
+            if self.validate_live_photo_zip(archive, name, expected_size):
+                archive_name = Path(name).stem + '.livephoto.zip'
+                archive_path = self.e.wd / (media_id + '__' + archive_name)
+                archive.replace(archive_path)
+                print('ORIGINAL_LIVE_PHOTO=VERIFIED_COMPONENTS_SIZE_CRC', flush=True)
+                return archive_path, archive_name
             self.unpack_original(archive, dst, name, expected_size)
             print('ORIGINAL_ZIP_FALLBACK=VERIFIED_SIZE_CRC', flush=True)
             return dst, name
         finally:
             archive.unlink(missing_ok=True)
+
+    def validate_live_photo_zip(self, archive, name, expected_size):
+        # Google reports the aggregate size of still + motion components.
+        with zipfile.ZipFile(archive) as zipped:
+            files = [entry for entry in zipped.infolist() if not entry.is_dir()]
+            if len(files) != 2 or any(Path(entry.filename).name != entry.filename for entry in files):
+                return False
+            photo = next((entry for entry in files if entry.filename == name), None)
+            if photo is None or Path(name).suffix.lower() not in ('.jpg','.jpeg','.heic','.heif'):
+                return False
+            video = next(entry for entry in files if entry is not photo)
+            if Path(video.filename).stem != Path(name).stem or Path(video.filename).suffix.lower() not in ('.mp4','.mov'):
+                return False
+            if min(entry.file_size for entry in files) <= 0 or sum(entry.file_size for entry in files) != expected_size:
+                return False
+            for index, entry in enumerate((photo, video)):
+                part = self.e.wd / ('livephoto-component-' + str(index))
+                try:
+                    total = 0
+                    with zipped.open(entry) as source, part.open('wb') as target:
+                        while chunk := source.read(1024 * 1024):
+                            total += len(chunk)
+                            if total > entry.file_size:
+                                raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                            target.write(chunk)
+                    if total != entry.file_size:
+                        raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                    if index:
+                        if validate_media(part, entry.filename, 'video') != 'video':
+                            raise DownloadError('INVALID_LIVE_PHOTO_VIDEO')
+                    else:
+                        with part.open('rb') as stream:
+                            prefix = stream.read(64)
+                        heic = prefix[4:8] == b'ftyp' and prefix[8:12] in (b'heic',b'heix',b'hevc',b'hevx',b'mif1',b'msf1')
+                        if not image_payload(prefix) and not heic:
+                            raise DownloadError('INVALID_LIVE_PHOTO_STILL')
+                finally:
+                    part.unlink(missing_ok=True)
+            return True
 
     @staticmethod
     def unpack_original(archive, dst, name, expected_size):

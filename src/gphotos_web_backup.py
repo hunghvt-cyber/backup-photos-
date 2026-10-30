@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import shutil
 import time
+import re
+import zipfile
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
@@ -225,10 +227,70 @@ class WebBackup:
                     dst.unlink(missing_ok=True)
             if route == 0:
                 print('ORIGINAL_FALLBACK reason=' + str(last_error), flush=True)
+        if os.environ.get('WEB_ZIP_REPAIR') == '1':
+            return self.zip_original(media_id, name, ext.size)
         if os.environ.get('WEB_BROWSER_REPAIR') == '1':
             print('ORIGINAL_BROWSER_FALLBACK=START', flush=True)
             return self.browser_original(media_id, ext.size)
         raise last_error or DownloadError('ORIGINAL_URL_MISSING')
+
+    def zip_original(self, media_id, name, expected_size):
+        if type(expected_size) is not int or expected_size <= 0:
+            raise DownloadError('ORIGINAL_SIZE_UNAVAILABLE')
+        raw = execute(self.client, payloads.GetDownloadToken(item_media_keys=[media_id]))
+        def token_in(value):
+            if isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', value):
+                return value
+            if isinstance(value, list):
+                return next((found for v in value if (found := token_in(v))), None)
+            return None
+        token = token_in(raw)
+        if not token:
+            raise DownloadError('ORIGINAL_ZIP_TOKEN_UNAVAILABLE')
+        archive = self.e.wd / (media_id + '__official.zip')
+        dst = self.e.wd / (media_id + '__' + name)
+        try:
+            for attempt in range(6):
+                if self.e.left() < 240:
+                    raise DownloadError('STOP_RESERVE')
+                info = execute(self.client, payloads.CheckDownloadToken(download_token=token))
+                if info.download_url:
+                    break
+                time.sleep(2)
+            else:
+                raise DownloadError('ORIGINAL_ZIP_NOT_READY')
+            if type(info.download_size) is not int or info.download_size <= 0:
+                raise DownloadError('ORIGINAL_ZIP_SIZE_UNAVAILABLE')
+            self.fetch_original(info.download_url, archive, info.download_size, route='zip')
+            self.unpack_original(archive, dst, name, expected_size)
+            print('ORIGINAL_ZIP_FALLBACK=VERIFIED_SIZE_CRC', flush=True)
+            return dst, name
+        finally:
+            archive.unlink(missing_ok=True)
+
+    @staticmethod
+    def unpack_original(archive, dst, name, expected_size):
+        try:
+            with zipfile.ZipFile(archive) as zipped:
+                files = [entry for entry in zipped.infolist() if not entry.is_dir()]
+                if len(files) != 1 or files[0].filename != name:
+                    raise DownloadError('ORIGINAL_ZIP_CONTENT_UNEXPECTED')
+                if files[0].file_size != expected_size:
+                    print('ORIGINAL_SIZE_DIAGNOSTIC=' + json.dumps({'route': 'zip_member',
+                          'expected_bytes': expected_size, 'actual_bytes': files[0].file_size}), flush=True)
+                    raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                with zipped.open(files[0]) as source, dst.open('wb') as target:
+                    total = 0
+                    while chunk := source.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > expected_size:
+                            raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                        target.write(chunk)
+                if total != expected_size:
+                    raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+        except BaseException:
+            dst.unlink(missing_ok=True)
+            raise
 
     def browser_original(self, media_id, expected_size):
         if type(expected_size) is not int or expected_size <= 0:

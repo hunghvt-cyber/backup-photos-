@@ -1,9 +1,6 @@
 name: Google Photos Historical Backfill
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/backfill.yml']
   workflow_dispatch:
     inputs:
       recovery_profile:
@@ -33,7 +30,7 @@ concurrency:
 jobs:
 
   recover_profile:
-    if: ${{ (inputs.recovery_profile && github.event_name == 'workflow_dispatch') || (github.event_name == 'push' && github.event.head_commit.message == 'Run staged profile recovery once 20261030') }}
+    if: ${{ inputs.recovery_profile && github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -117,7 +114,7 @@ jobs:
           rm -f -- "$HOME/.config/rclone/rclone.conf"
           echo 'RECOVERY_PLAINTEXT_LOCAL_CLEANUP=PASS'
   backfill:
-    if: ${{ github.event_name != 'push' && !inputs.recovery_profile }}
+    if: ${{ !inputs.recovery_profile }}
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
     timeout-minutes: 330

@@ -46,6 +46,7 @@ def sha(p):
   for b in iter(lambda:f.read(1048576),b''):h.update(b)
  return h.hexdigest()
 
+RAW_EXTENSIONS={'.arw','.cr2','.cr3','.dng','.nef','.nrw','.raf','.pef','.rw2','.srw','.orf','.raw'}
 VIDEO_EXTENSIONS={'.mp4','.mov','.m4v','.webm','.mkv','.avi','.3gp','.3g2','.mts','.m2ts','.mpg','.mpeg'}
 def image_payload(prefix):
  return (prefix.startswith((b'\xff\xd8\xff',b'\x89PNG\r\n\x1a\n',b'GIF87a',b'GIF89a'))
@@ -59,6 +60,7 @@ def validate_media(path,filename,expected_type=None):
  if lower.startswith((b'<!doctype html',b'<html')) or b'<html' in lower:
   raise RuntimeError('HTML_INSTEAD_OF_MEDIA')
  image=image_payload(prefix)
+ if image and Path(filename).suffix.lower() in RAW_EXTENSIONS:raise RuntimeError('IMAGE_PREVIEW_INSTEAD_OF_RAW')
  wants_video=expected_type=='video' or Path(filename).suffix.lower() in VIDEO_EXTENSIONS
  if wants_video:
   if image:raise RuntimeError('IMAGE_PREVIEW_INSTEAD_OF_VIDEO')

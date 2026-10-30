@@ -128,6 +128,16 @@ class MediaIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'REMOTE_EXISTENCE_UNCONFIRMED'):
                 engine.remote(None,'clip.mp4','media-id','hash',100)
 
+    def test_raw_extension_never_accepts_jpeg_preview(self):
+        preview=Path(self.tmp.name)/'preview'
+        preview.write_bytes(bytes([255,216,255])+b'preview')
+        for name in ('camera.ARW','camera.DNG','camera.NEF'):
+            with self.assertRaisesRegex(RuntimeError,'IMAGE_PREVIEW_INSTEAD_OF_RAW'):
+                validate_media(preview,name,'photo')
+        original=Path(self.tmp.name)/'raw'
+        original.write_bytes(bytes([73,73,42,0])+b'camera-data')
+        self.assertEqual(validate_media(original,'camera.ARW','photo'),'unclassified')
+
     def test_real_mp4_with_duration_and_video_stream_is_accepted(self):
         clip=Path(self.tmp.name)/'real.mp4'
         subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=size=32x32:rate=2','-t','1','-c:v','mpeg4',str(clip)],check=True,capture_output=True)

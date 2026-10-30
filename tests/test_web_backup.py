@@ -24,6 +24,26 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_explicit_original_menu_requires_matching_size_and_cleans_failure(self):
+        self.e.a = NS(profile='unused',chrome='unused')
+        self.e.wd = Path(self.tmp.name)
+        self.e.db.touch('failed','photo','https://photos.google.com/photo/failed',None,None)
+        context, page, pw = MagicMock(), MagicMock(), MagicMock()
+        context.pages = [page]
+        pw.chromium.launch_persistent_context.return_value = context
+        page.get_by_role.return_value.count.return_value = 1
+        download = NS(suggested_filename='original.jpg',save_as=lambda dst:Path(dst).write_bytes(b'original'))
+        page.expect_download.return_value.__enter__.return_value.value = download
+        manager = MagicMock()
+        manager.__enter__.return_value = pw
+        with patch('src.gphotos_web_backup.sync_playwright',return_value=manager):
+            path, _ = self.web.browser_unmodified_original('failed',8)
+            self.assertEqual(path.read_bytes(),b'original')
+            with self.assertRaisesRegex(RuntimeError,'ORIGINAL_SIZE_MISMATCH'):
+                self.web.browser_unmodified_original('failed',9)
+        self.assertFalse(path.exists())
+        context.close.assert_called()
+
     def test_live_photo_zip_requires_exact_pair_sum_and_valid_payloads(self):
         import zipfile
         self.e.wd = Path(self.tmp.name)

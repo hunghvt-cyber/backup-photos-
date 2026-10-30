@@ -1,9 +1,6 @@
 name: Google Photos Historical Backfill
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/backfill.yml']
   workflow_dispatch:
     inputs:
       recovery_profile:
@@ -122,22 +119,22 @@ jobs:
           rm -f -- "$HOME/.config/rclone/rclone.conf"
           echo 'RECOVERY_PLAINTEXT_LOCAL_CLEANUP=PASS'
   backfill:
-    if: ${{ (github.event_name != 'push' && !inputs.recovery_profile) || (github.event_name == 'push' && github.event.head_commit.message == 'Diagnose residual original download once 20261031') }}
+    if: ${{ !inputs.recovery_profile }}
     runs-on: ubuntu-24.04
     # Public standard runner: 5h engine + shutdown/profile/report reserve.
-    timeout-minutes: 60
+    timeout-minutes: 330
     env:
       KOOFR_USER: ${{ secrets.KOOFR_USER }}
       KOOFR_APP_PASSWORD: ${{ secrets.KOOFR_APP_PASSWORD }}
       GPHOTOS_PROFILE_KEY: ${{ secrets.GPHOTOS_PROFILE_KEY }}
-      WEB_RETRY_ONLY: '1'
+      WEB_RETRY_ONLY: ${{ inputs.repair_errors && '1' || '0' }}
       WEB_REPAIR_SAMPLE: '0'
       WEB_BROWSER_REPAIR: '0'
       WEB_ZIP_REPAIR: '1'
-      WEB_UNMODIFIED_REPAIR: '1'
-      WEB_REPAIR_METADATA_BATCH: '1'
-      MAX_RUNTIME_SECONDS: "1800"
-      MAX_ITEMS: ${{ inputs.max_items || '3' }}
+      WEB_UNMODIFIED_REPAIR: '0'
+      WEB_REPAIR_METADATA_BATCH: '0'
+      MAX_RUNTIME_SECONDS: "18000"
+      MAX_ITEMS: ${{ inputs.max_items || '10000' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and configure runtime
@@ -193,7 +190,7 @@ jobs:
           # Stop a stuck download BEFORE GitHub kills the entire runner.
           # Even on failure, the next always() steps save the Chrome profile
           # and publish a diagnostic report.
-          timeout --signal=INT --kill-after=30s 2100s \
+          timeout --signal=INT --kill-after=30s 18300s \
             python3 -m src.gphotos_web_backup --scan-seconds 600 --inventory-refresh-seconds 86400 --inventory-checkpoint-pages 10 2>&1 | tee "$RUNNER_TEMP/gphotos-backfill.log"
       - name: Persist refreshed Chrome profile
         if: always()

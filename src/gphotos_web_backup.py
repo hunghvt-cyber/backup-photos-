@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 from gpwc import Client, payloads
-from src.gphotos_sync import Engine, now, validate_media, image_payload
+from src.gphotos_sync import Engine, now, validate_media, image_payload, RAW_EXTENSIONS
 
 
 def export_cookies(context, path):
@@ -269,7 +269,7 @@ class WebBackup:
                 return self.zip_original(media_id, name, ext.size)
             except DownloadError as exc:
                 if os.environ.get('WEB_UNMODIFIED_REPAIR') == '1' and str(exc) in ('ORIGINAL_SIZE_MISMATCH','ORIGINAL_ZIP_CONTENT_UNEXPECTED'):
-                    return self.browser_unmodified_original(media_id, ext.size)
+                    return self.browser_unmodified_original(media_id, ext.size, raw_allowed=Path(name).suffix.lower() in RAW_EXTENSIONS)
                 raise
         if os.environ.get('WEB_BROWSER_REPAIR') == '1':
             print('ORIGINAL_BROWSER_FALLBACK=START', flush=True)
@@ -398,7 +398,7 @@ class WebBackup:
                 matches.append(control)
         return matches[0] if len(matches) == 1 else None
 
-    def browser_unmodified_original(self, media_id, expected_size):
+    def browser_unmodified_original(self, media_id, expected_size, raw_allowed=False):
         if type(expected_size) is not int or expected_size <= 0:
             raise DownloadError('ORIGINAL_SIZE_UNAVAILABLE')
         row = self.db.execute('SELECT url FROM media WHERE id=?', (media_id,)).fetchone()
@@ -430,7 +430,34 @@ class WebBackup:
                     page.wait_for_timeout(250)
                 print('ORIGINAL_UNMODIFIED_MENU_AVAILABLE=' + str(original is not None), flush=True)
                 if original is None:
-                    raise DownloadError('ORIGINAL_UNMODIFIED_UNAVAILABLE')
+                    if not raw_allowed:
+                        raise DownloadError('ORIGINAL_UNMODIFIED_UNAVAILABLE')
+                    page.keyboard.press('Escape')
+                    edit = self.download_control(page,'button',('edit','edit photo','chinh sua','chinh sua anh'))
+                    if edit is None:
+                        raise DownloadError('ORIGINAL_RAW_EDIT_CHOOSER_UNAVAILABLE')
+                    edit.click()
+                    choice = None
+                    radio = False
+                    for _ in range(30):
+                        choice = self.download_control(page,'radio',('download raw file','tai tep raw','tai xuong tep raw'),prefix=True)
+                        radio = choice is not None
+                        if choice is None:
+                            choice = self.download_control(page,'button',('download raw file','tai tep raw','tai xuong tep raw'),prefix=True)
+                        if choice is not None:
+                            break
+                        page.wait_for_timeout(250)
+                    print('ORIGINAL_RAW_DOWNLOAD_CHOICE_AVAILABLE=' + str(choice is not None),flush=True)
+                    if choice is None:
+                        raise DownloadError('ORIGINAL_RAW_DOWNLOAD_CHOICE_UNAVAILABLE')
+                    if radio:
+                        choice.check()
+                    else:
+                        choice.click()
+                    original = self.download_control(page,'button',('continue','tiep tuc'))
+                    if original is None:
+                        raise DownloadError('ORIGINAL_RAW_CONTINUE_UNAVAILABLE')
+                    print('ORIGINAL_RAW_DIALOG=DOWNLOAD_ONLY_SELECTED',flush=True)
                 with page.expect_download(timeout=120000) as event:
                     original.click()
                 download = event.value
@@ -444,6 +471,10 @@ class WebBackup:
                       'expected_bytes':expected_size,'actual_bytes':actual}), flush=True)
                 if actual != expected_size:
                     raise DownloadError('ORIGINAL_SIZE_MISMATCH')
+                if raw_allowed:
+                    with dst.open('rb') as stream:
+                        if image_payload(stream.read(64)):
+                            raise DownloadError('IMAGE_PREVIEW_INSTEAD_OF_RAW')
                 print('ORIGINAL_UNMODIFIED_MENU=VERIFIED_SIZE', flush=True)
                 return dst, name
             except BaseException:

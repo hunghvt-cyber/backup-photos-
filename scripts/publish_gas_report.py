@@ -18,7 +18,8 @@ from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 SOURCES = {
     'hunghvt-cyber/backup-photos': ('gdrive', 'gdrive-koofr', 'bisync.yml'),
-    'hunghvt-cyber/backup-drive': ('gphotos', 'gphotos-koofr', 'daily.yml'),
+    'hunghvt-cyber/backup-drive': ('gdrive', 'gdrive-koofr', 'bisync.yml'),
+    'hunghvt-cyber/backup-photos-': ('gphotos', 'gphotos-koofr', 'daily.yml'),
     'hunghvt-cyber/my-backup-gdrive-koofr': ('gdrive', 'gdrive-koofr', 'bisync.yml'),
     'hunghvt-cyber/google-photos-koofr': ('gphotos', 'gphotos-koofr', 'daily.yml'),
 }
@@ -43,6 +44,9 @@ def normalize(report, env):
     if repo not in SOURCES:
         raise ValueError('UNAPPROVED_REPOSITORY')
     source, label, workflow = SOURCES[repo]
+    expected_id = '1191594464' if source == 'gdrive' else '1336978361'
+    if env.get('GITHUB_REPOSITORY_ID') not in (None, expected_id):
+        raise ValueError('INVALID_REPORT_IDENTITY')
     if not env.get('GITHUB_WORKFLOW_REF', '').startswith(repo+'/.github/workflows/'+workflow+'@refs/'):
         raise ValueError('UNAPPROVED_WORKFLOW')
     fields = {'schema_version','source','run_id','run_url','status','started_at','finished_at','metrics','warnings'}

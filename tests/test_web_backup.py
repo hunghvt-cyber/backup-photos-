@@ -24,6 +24,40 @@ class WebInventoryTests(unittest.TestCase):
         self.e.db.c.close()
         self.tmp.cleanup()
 
+    def test_raw_chooser_selects_download_only_and_requires_that_choice(self):
+        self.e.a=NS(profile='unused',chrome='unused')
+        self.e.wd=Path(self.tmp.name)
+        self.e.db.touch('raw','photo','https://photos.google.com/photo/raw',None,None)
+        for allow_download in (True,False):
+            stage={'value':'viewer'}
+            context,page,pw=MagicMock(),MagicMock(),MagicMock()
+            context.pages=[page]
+            pw.chromium.launch_persistent_context.return_value=context
+            more,edit,raw_choice,continue_button,google_editor=[MagicMock() for _ in range(5)]
+            for control,label in ((more,'Tùy chọn khác'),(edit,'Chỉnh sửa'),(raw_choice,'Tải tệp RAW xuống'),(continue_button,'Tiếp tục'),(google_editor,'Chỉnh sửa bằng Google Photos')):
+                control.get_attribute.return_value=label
+            edit.click.side_effect=lambda:stage.update(value='chooser')
+            def controls(role,**kwargs):
+                if role=='menuitem':return NS(all=lambda:[])
+                if role=='radio':return NS(all=lambda:[raw_choice,google_editor] if allow_download and stage['value']=='chooser' else [google_editor])
+                return NS(all=lambda:[more,edit] if stage['value']=='viewer' else [continue_button])
+            page.get_by_role.side_effect=controls
+            original_bytes=bytes([73,73,42,0])+b'raw-original'
+            download=NS(suggested_filename='original.ARW',save_as=lambda dst:Path(dst).write_bytes(original_bytes))
+            page.expect_download.return_value.__enter__.return_value.value=download
+            manager=MagicMock()
+            manager.__enter__.return_value=pw
+            with patch('src.gphotos_web_backup.sync_playwright',return_value=manager):
+                if allow_download:
+                    path,_=self.web.browser_unmodified_original('raw',len(original_bytes),raw_allowed=True)
+                    self.assertEqual(path.read_bytes(),original_bytes)
+                    raw_choice.check.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(RuntimeError,'ORIGINAL_RAW_DOWNLOAD_CHOICE_UNAVAILABLE'):
+                        self.web.browser_unmodified_original('raw',len(original_bytes),raw_allowed=True)
+                    continue_button.click.assert_not_called()
+                google_editor.click.assert_not_called()
+
     def test_original_control_never_selects_delete_or_revert(self):
         controls = []
         for label in ('Xóa bản gốc','Khôi phục bản gốc','Delete original','Tải tệp RAW xuống'):

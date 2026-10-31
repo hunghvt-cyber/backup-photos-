@@ -37,7 +37,7 @@ class BackupPublisherTests(unittest.TestCase):
             self.assertNotIn('run_number',report)
 
     def test_renamed_repos_preserve_deployed_wire_contract(self):
-        for source, current in [('gdrive','backup-photos'), ('gphotos','backup-drive')]:
+        for source, current in [('gdrive','backup-drive'), ('gphotos','backup-photos-')]:
             report,env=fixture(source)
             old_url=report['run_url'];old_repo=env['GITHUB_REPOSITORY']
             repo='hunghvt-cyber/'+current
@@ -64,6 +64,25 @@ class BackupPublisherTests(unittest.TestCase):
         env['GITHUB_WORKFLOW_REF']='hunghvt-cyber/backup-photos/.github/workflows/bisync.yml@refs/heads/main'
         report['run_url']='https://github.com/hunghvt-cyber/backup-photos/actions/runs/101'
         with self.assertRaisesRegex(ValueError,'INVALID_REPORT_IDENTITY'):normalize(report,env)
+
+    def test_reused_drive_name_cannot_publish_photos_and_ids_cannot_cross(self):
+        report, env = fixture('gphotos')
+        old = env['GITHUB_REPOSITORY']
+        env['GITHUB_REPOSITORY'] = 'hunghvt-cyber/backup-drive'
+        env['GITHUB_WORKFLOW_REF'] = env['GITHUB_WORKFLOW_REF'].replace(old, env['GITHUB_REPOSITORY'])
+        report['run_url'] = report['run_url'].replace(old, env['GITHUB_REPOSITORY'])
+        with self.assertRaisesRegex(ValueError, 'UNAPPROVED_WORKFLOW'):
+            publish(report, env, request=lambda *a: self.fail('network'))
+        for source, repo, repo_id in [('gdrive','backup-drive','1191594464'), ('gphotos','backup-photos-','1336978361')]:
+            report, env = fixture(source)
+            old = env['GITHUB_REPOSITORY']; new = 'hunghvt-cyber/'+repo
+            env.update(GITHUB_REPOSITORY=new, GITHUB_REPOSITORY_ID=repo_id)
+            env['GITHUB_WORKFLOW_REF'] = env['GITHUB_WORKFLOW_REF'].replace(old,new)
+            report['run_url'] = report['run_url'].replace(old,new)
+            self.assertEqual(normalize(report, env)[0], source)
+            env['GITHUB_REPOSITORY_ID'] = '1336978361' if source == 'gdrive' else '1191594464'
+            with self.assertRaisesRegex(ValueError, 'INVALID_REPORT_IDENTITY'):
+                publish(report, env, request=lambda *a: self.fail('network'))
 
     def test_private_fields_wrong_run_and_backfill_are_rejected(self):
         report,env=fixture()
